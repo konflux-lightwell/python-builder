@@ -1,0 +1,667 @@
+# default to latest supported policy, x86_64
+ARG BASEIMAGE=registry.access.redhat.com/ubi8/ubi@sha256:8e573e1d76ff27f9e1219b33c114e48b0f7b86f2e6858cd8861e84431c7416e4
+ARG POLICY=manylinux_2_28
+ARG PLATFORM=x86_64
+ARG DEVTOOLSET_ROOTPATH=/opt/rh/gcc-toolset-14/root
+ARG LD_LIBRARY_PATH_ARG=${DEVTOOLSET_ROOTPATH}/usr/lib64:${DEVTOOLSET_ROOTPATH}/usr/lib:${DEVTOOLSET_ROOTPATH}/usr/lib64/dyninst:${DEVTOOLSET_ROOTPATH}/usr/lib/dyninst
+ARG PREPEND_PATH=/usr/local/bin:${DEVTOOLSET_ROOTPATH}/usr/bin:
+ARG MANYLINUX_BUILDARCH=${BUILDARCH}
+ARG MANYLINUX_DISABLE_CLANG=0
+ARG MANYLINUX_DISABLE_CLANG_FOR_CPYTHON=0
+ARG MANYLINUX_CLANG_VERSION=21.1.5.0
+ARG MANYLINUX_COSIGN_VERSION=3.0.2
+# The shared OpenSSL pin, in one place. Two stages build it -- build_openssl,
+# which curl links, and build_cpython -- and if they ever drift the image ends
+# up shipping two different OpenSSLs. Keep PREFIX in step with ROOT:
+# build-openssl.sh derives it as /opt/_internal/openssl-<major>.<minor>.
+ARG OPENSSL_SHARED_ROOT=openssl-3.6.4
+ARG OPENSSL_SHARED_HASH=9bffaa1ad1e07b354c21bd3324ec02fa15579f45a7d0494b3e74bc449b7333ef
+ARG OPENSSL_SHARED_PREFIX=/opt/_internal/openssl-3.6
+
+
+FROM $BASEIMAGE AS runtime_base_packages
+ARG POLICY
+ARG PLATFORM
+ARG DEVTOOLSET_ROOTPATH
+ARG LD_LIBRARY_PATH_ARG
+ARG PREPEND_PATH
+LABEL maintainer="Red Hat"
+
+ENV AUDITWHEEL_POLICY=${POLICY} AUDITWHEEL_ARCH=${PLATFORM} AUDITWHEEL_PLAT=${POLICY}_${PLATFORM}
+ENV LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 LANGUAGE=en_US.UTF-8
+ENV DEVTOOLSET_ROOTPATH=${DEVTOOLSET_ROOTPATH}
+ENV LD_LIBRARY_PATH=${LD_LIBRARY_PATH_ARG}
+ENV PATH=${PREPEND_PATH}${PATH}
+ENV PKG_CONFIG_PATH=/usr/local/lib/pkgconfig
+
+# setup entrypoint
+COPY build_scripts/install-entrypoint.sh \
+     build_scripts/update-system-packages.sh \
+     build_scripts/build_utils.sh \
+     /opt/_internal/build_scripts/
+
+RUN /opt/_internal/build_scripts/install-entrypoint.sh
+COPY manylinux-entrypoint /usr/local/bin/manylinux-entrypoint
+ENTRYPOINT ["manylinux-entrypoint"]
+
+COPY build_scripts/install-runtime-packages.sh /opt/_internal/build_scripts/
+RUN manylinux-entrypoint /opt/_internal/build_scripts/install-runtime-packages.sh
+
+
+# prepare cross-compilation support
+FROM --platform=linux/${MANYLINUX_BUILDARCH} ghcr.io/mayeut/static-clang:${MANYLINUX_CLANG_VERSION} AS static_clang_bin
+FROM runtime_base_packages AS static_clang_prepare
+ARG MANYLINUX_DISABLE_CLANG
+COPY build_scripts/install-clang-static.sh /opt/_internal/build_scripts/
+RUN --mount=type=bind,target=/clang,from=static_clang_bin \
+    mkdir -p /tmp/cross-compiler && \
+    cp -rf /clang/opt/clang/* /tmp/cross-compiler/ && \
+    /opt/_internal/build_scripts/install-clang-static.sh /tmp/cross-compiler
+FROM scratch AS static_clang
+COPY --from=static_clang_prepare /tmp/cross-compiler /
+
+
+FROM runtime_base_packages AS runtime_base
+COPY build_scripts/install-autoconf.sh /opt/_internal/build_scripts/
+RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
+    export AUTOCONF_ROOT=autoconf-2.72 && \
+    export AUTOCONF_HASH=afb181a76e1ee72832f6581c0eddf8df032b83e2e0239ef79ebedc4467d92d6e && \
+    export AUTOCONF_DOWNLOAD_URL=https://ftp.gnu.org/gnu/autoconf && \
+    /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/install-autoconf.sh
+
+COPY build_scripts/install-automake.sh /opt/_internal/build_scripts/
+RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
+    export AUTOMAKE_ROOT=automake-1.18.1 && \
+    export AUTOMAKE_HASH=63e585246d0fc8772dffdee0724f2f988146d1a3f1c756a3dc5cfbefa3c01915 && \
+    export AUTOMAKE_DOWNLOAD_URL=https://ftp.gnu.org/gnu/automake && \
+    /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/install-automake.sh
+
+COPY build_scripts/install-libtool.sh /opt/_internal/build_scripts/
+RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
+    export LIBTOOL_ROOT=libtool-2.5.4 && \
+    export LIBTOOL_HASH=da8ebb2ce4dcf46b90098daf962cffa68f4b4f62ea60f798d0ef12929ede6adf && \
+    export LIBTOOL_DOWNLOAD_URL=https://ftp.gnu.org/gnu/libtool && \
+    /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/install-libtool.sh
+
+COPY build_scripts/install-libxcrypt.sh /opt/_internal/build_scripts/
+RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
+    export LIBXCRYPT_VERSION=4.5.1 && \
+    export LIBXCRYPT_HASH=e9b46a62397c15372935f6a75dc3929c62161f2620be7b7f57f03d69102c1a86 && \
+    export LIBXCRYPT_DOWNLOAD_URL=https://github.com/besser82/libxcrypt/releases/download && \
+    /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/install-libxcrypt.sh
+
+
+FROM runtime_base AS build_base
+COPY build_scripts/install-build-packages.sh /opt/_internal/build_scripts/
+RUN manylinux-entrypoint /opt/_internal/build_scripts/install-build-packages.sh
+
+
+# What curl links. build_cpython builds the same OpenSSL for CPython, but it is
+# declared ~300 lines below this point and stage references only ever point
+# backwards, so curl cannot reach it: the curl that ends up in the image is the
+# one build_git builds, right here. Without this stage configure falls back to
+# UBI8's openssl-devel, which is 1.1.1k and end of life since 2023-09-11.
+FROM build_base AS build_openssl
+ARG OPENSSL_SHARED_ROOT
+ARG OPENSSL_SHARED_HASH
+COPY build_scripts/build-openssl.sh /opt/_internal/build_scripts/
+RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
+    export OPENSSL_ROOT=${OPENSSL_SHARED_ROOT} && \
+    export OPENSSL_HASH=${OPENSSL_SHARED_HASH} && \
+    export OPENSSL_DOWNLOAD_URL=https://github.com/openssl/openssl/releases/download/${OPENSSL_ROOT} && \
+    /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/build-openssl.sh
+
+
+FROM build_base AS build_git
+ARG OPENSSL_SHARED_PREFIX
+COPY --from=build_openssl ${OPENSSL_SHARED_PREFIX} ${OPENSSL_SHARED_PREFIX}
+# Register it before anything runs, rather than setting LD_LIBRARY_PATH on one
+# RUN: build-curl.sh executes the curl it just built, and build-git.sh then
+# links git against that libcurl, so both steps need libssl.so.3. This file
+# stays in the stage -- only /manylinux-rootfs is copied out of build_git.
+RUN echo "${OPENSSL_SHARED_PREFIX}/lib" > /etc/ld.so.conf.d/00-openssl.conf && ldconfig
+COPY build_scripts/build-curl.sh /opt/_internal/build_scripts/
+RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
+    export CURL_ROOT=curl-8.17.0 && \
+    export CURL_HASH=e8e74cdeefe5fb78b3ae6e90cd542babf788fa9480029cfcee6fd9ced42b7910 && \
+    export CURL_DOWNLOAD_URL=https://curl.haxx.se/download && \
+    export CURL_OPENSSL_PREFIX=${OPENSSL_SHARED_PREFIX} && \
+    /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/build-curl.sh
+COPY build_scripts/build-git.sh /opt/_internal/build_scripts/
+RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
+    export GIT_ROOT=git-2.51.2 && \
+    export GIT_HASH=9b44c2b337ec838e10aad42439d390963904449710d30c9e7e4ba449f45da98f && \
+    export GIT_DOWNLOAD_URL=https://www.kernel.org/pub/software/scm/git && \
+    /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/build-git.sh
+
+
+FROM build_base AS build_sqlite3
+COPY build_scripts/build-sqlite3.sh /opt/_internal/build_scripts/
+RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
+    export SQLITE_AUTOCONF_ROOT=sqlite-autoconf-3510000 && \
+    export SQLITE_AUTOCONF_HASH=42e26dfdd96aa2e6b1b1be5c88b0887f9959093f650d693cb02eb9c36d146ca5 && \
+    export SQLITE_AUTOCONF_DOWNLOAD_URL=https://www.sqlite.org/2025 && \
+    /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/build-sqlite3.sh
+
+
+FROM build_base AS build_tcl_tk
+COPY build_scripts/build-tcltk.sh /opt/_internal/build_scripts/
+RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
+    export TCL_ROOT=tcl8.6.17 && \
+    export TCL_HASH=a3903371efcce8a405c5c245d029e9f6850258a60fa3761c4d58995610949b31 && \
+    export TCL_DOWNLOAD_URL=https://prdownloads.sourceforge.net/tcl && \
+    export TK_ROOT=tk8.6.17 && \
+    export TK_HASH=e4982df6f969c08bf9dd858a6891059b4a3f50dc6c87c10abadbbe2fc4838946 && \
+    /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/build-tcltk.sh
+
+
+FROM build_base AS build_mpdecimal
+COPY build_scripts/build-mpdecimal.sh /opt/_internal/build_scripts/
+RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
+    export MPDECIMAL_ROOT=mpdecimal-4.0.1 && \
+    export MPDECIMAL_HASH=96d33abb4bb0070c7be0fed4246cd38416188325f820468214471938545b1ac8 && \
+    export MPDECIMAL_DOWNLOAD_URL=https://www.bytereef.org/software/mpdecimal/releases && \
+    /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/build-mpdecimal.sh
+
+
+FROM build_base AS build_zstd
+COPY build_scripts/build-zstd.sh /opt/_internal/build_scripts/
+RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
+    export ZSTD_VERSION=1.5.7 && \
+    export ZSTD_HASH=eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3 && \
+    export ZSTD_DOWNLOAD_URL=https://github.com/facebook/zstd/releases/download && \
+    /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/build-zstd.sh
+
+
+FROM build_base AS build_rust
+COPY build_scripts/build-rust.sh /opt/_internal/build_scripts/
+# The unversioned .../rustup/dist path always serves the newest rustup, so the
+# version is pinned in the URL; otherwise RUSTUP_HASH breaks on every release.
+RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
+    export RUST_VERSION=1.98.1 && \
+    export RUSTUP_VERSION=1.29.1 && \
+    export RUSTUP_HASH=dda7234360b7f578ca8b0ddcb80145646fa61a67c1720a5abc7051b35c9fcb71 && \
+    export RUSTUP_DOWNLOAD_URL=https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION} && \
+    /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/build-rust.sh
+
+
+# Build-time curl for Arrow's bundled cloud SDKs. Only its /manylinux-buildfs is
+# consumed (by build_arrow); the libcurl that ships comes out of build_git.
+FROM build_base AS build_curl
+ARG OPENSSL_SHARED_PREFIX
+COPY --from=build_openssl ${OPENSSL_SHARED_PREFIX} ${OPENSSL_SHARED_PREFIX}
+RUN echo "${OPENSSL_SHARED_PREFIX}/lib" > /etc/ld.so.conf.d/00-openssl.conf && ldconfig
+COPY build_scripts/build-curl.sh /opt/_internal/build_scripts/
+RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
+    export CURL_ROOT=curl-8.17.0 && \
+    export CURL_HASH=e8e74cdeefe5fb78b3ae6e90cd542babf788fa9480029cfcee6fd9ced42b7910 && \
+    export CURL_DOWNLOAD_URL=https://curl.haxx.se/download && \
+    export CURL_OPENSSL_PREFIX=${OPENSSL_SHARED_PREFIX} && \
+    /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/build-curl.sh
+
+
+FROM build_base AS build_libjpeg_turbo
+COPY build_scripts/build-libjpeg-turbo.sh /opt/_internal/build_scripts/
+RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
+    export LIBJPEG_TURBO_VERSION=3.1.3 && \
+    export LIBJPEG_TURBO_HASH=075920b826834ac4ddf97661cc73491047855859affd671d52079c6867c1c6c0 && \
+    export LIBJPEG_TURBO_DOWNLOAD_URL=https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download && \
+    /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/build-libjpeg-turbo.sh
+
+
+FROM build_base AS build_libyaml
+COPY build_scripts/build-libyaml.sh /opt/_internal/build_scripts/
+RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
+    export LIBYAML_VERSION=0.2.5 && \
+    export LIBYAML_HASH=c642ae9b75fee120b2d96c712538bd2cf283228d2337df2cf2988e3c02678ef4 && \
+    export LIBYAML_DOWNLOAD_URL=https://pyyaml.org/download/libyaml && \
+    /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/build-libyaml.sh
+
+
+FROM build_base AS build_libxml2
+COPY build_scripts/build-libxml2.sh /opt/_internal/build_scripts/
+RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
+    export LIBXML2_VERSION=2.15.1 && \
+    export LIBXML2_HASH=c008bac08fd5c7b4a87f7b8a71f283fa581d80d80ff8d2efd3b26224c39bc54c && \
+    export LIBXML2_DOWNLOAD_URL=https://download.gnome.org/sources/libxml2 && \
+    /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/build-libxml2.sh
+
+
+FROM build_base AS build_libxslt
+COPY --from=build_libxml2 /manylinux-buildfs /
+COPY build_scripts/build-libxslt.sh /opt/_internal/build_scripts/
+RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
+    export LIBXSLT_VERSION=1.1.45 && \
+    export LIBXSLT_HASH=9acfe68419c4d06a45c550321b3212762d92f41465062ca4ea19e632ee5d216e && \
+    export LIBXSLT_DOWNLOAD_URL=https://download.gnome.org/sources/libxslt && \
+    /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/build-libxslt.sh
+
+
+FROM build_base AS build_libffi
+COPY build_scripts/build-libffi.sh /opt/_internal/build_scripts/
+RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
+    export LIBFFI_VERSION=3.5.2 && \
+    export LIBFFI_HASH=f3a3082a23b37c293a4fcd1053147b371f2ff91fa7ea1b2a52e335676bac82dc && \
+    export LIBFFI_DOWNLOAD_URL=https://github.com/libffi/libffi/releases/download && \
+    /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/build-libffi.sh
+
+
+FROM build_base AS build_openblas
+COPY build_scripts/build-openblas.sh /opt/_internal/build_scripts/
+RUN export OPENBLAS_VERSION=0.3.34 && \
+    export OPENBLAS_HASH=cd7e129868320cc2d033afa920e31202dfe0b8066a5b66661900ccc0f197dfed && \
+    export OPENBLAS_DOWNLOAD_URL=https://github.com/OpenMathLib/OpenBLAS/releases/download && \
+    /opt/_internal/build_scripts/build-openblas.sh
+
+
+FROM build_base AS build_libomp
+COPY build_scripts/build-libomp.sh /opt/_internal/build_scripts/
+RUN export LIBOMP_VERSION=20.1.6 && \
+    export LIBOMP_HASH=ff8dabd89212cd41b4fc5c26433bcde368873e4f10ea0331792e6b6e7707eff9 && \
+    export LIBOMP_CMAKE_HASH=b4b3efa5d5b01b3f211f1ba326bb6f0c318331f828202d332c95b7f30fca5f8c && \
+    export LIBOMP_DOWNLOAD_URL=https://github.com/llvm/llvm-project/releases/download && \
+    /opt/_internal/build_scripts/build-libomp.sh
+
+
+FROM build_base AS build_zlib
+COPY build_scripts/build-zlib.sh /opt/_internal/build_scripts/
+RUN export ZLIB_VERSION=1.3.1 && \
+    export ZLIB_HASH=9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23 && \
+    export ZLIB_DOWNLOAD_URL=https://github.com/madler/zlib/releases/download/v1.3.1 && \
+    /opt/_internal/build_scripts/build-zlib.sh
+
+
+FROM build_base AS build_arrow
+# Arrow's bundled cloud SDKs (S3/GCS/Azure) link libcurl, and the Azure SDK
+# also needs libxml2; aws-sdk-cpp/curl pull in zlib. Stage the source-built
+# dev trees so CMake can find them. (build_curl/build_libxml2/build_zlib are all
+# defined earlier so these remain backward stage references.)
+ARG OPENSSL_SHARED_PREFIX
+COPY --from=build_curl /manylinux-buildfs /
+COPY --from=build_libxml2 /manylinux-buildfs /
+COPY --from=build_zlib /manylinux-buildfs /
+# Arrow has to agree with libcurl on OpenSSL. Linking libcurl needs libssl.so.3
+# resolvable at all, and aws-sdk-cpp would otherwise find UBI's 1.1.1k through
+# CMake's default search -- which would put two OpenSSL majors in one pyarrow
+# wheel. OPENSSL_ROOT_DIR is what FindOpenSSL keys on.
+COPY --from=build_openssl ${OPENSSL_SHARED_PREFIX} ${OPENSSL_SHARED_PREFIX}
+# Register only OpenSSL, never the curl prefix: libssl.so.3 adds a soname UBI8
+# does not have, whereas putting our libcurl.so.4 on the default search path
+# hands UBI's curl binary a libcurl built without HTTP/2, and it then fails
+# every https fetch with CURLE_NOT_BUILT_IN -- including build-arrow.sh's own
+# source download. Arrow reaches our libcurl through an rpath instead.
+RUN echo "${OPENSSL_SHARED_PREFIX}/lib" > /etc/ld.so.conf.d/00-openssl.conf && ldconfig
+COPY build_scripts/build-arrow.sh /opt/_internal/build_scripts/
+RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
+    export ARROW_VERSION=25.0.1 && \
+    export ARROW_HASH=43d5de0a581f43cf63a2c06b4dcf13b9ff6fcd800f023324596e5781093bc500 && \
+    export ARROW_DOWNLOAD_URL=https://archive.apache.org/dist/arrow/arrow-${ARROW_VERSION} && \
+    export OPENSSL_ROOT_DIR=${OPENSSL_SHARED_PREFIX} && \
+    /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/build-arrow.sh
+
+
+FROM build_base AS build_bzip2
+COPY build_scripts/build-bzip2.sh /opt/_internal/build_scripts/
+RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
+    export BZIP2_VERSION=1.0.8 && \
+    export BZIP2_HASH=ab5a03176ee106d3f0fa90e381da478ddae405918153cca248e682cd0c4a2269 && \
+    export BZIP2_DOWNLOAD_URL=https://sourceware.org/pub/bzip2 && \
+    /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/build-bzip2.sh
+
+
+FROM build_base AS build_libpng
+COPY --from=build_zlib /manylinux-buildfs /
+COPY build_scripts/build-libpng.sh /opt/_internal/build_scripts/
+RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
+    export LIBPNG_VERSION=1.6.44 && \
+    export LIBPNG_HASH=60c4da1d5b7f0aa8d158da48e8f8afa9773c1c8baa5d21974df61f1886b8ce8e && \
+    export LIBPNG_DOWNLOAD_URL=https://download.sourceforge.net/libpng && \
+    /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/build-libpng.sh
+
+
+FROM build_base AS build_libtiff
+COPY --from=build_zlib /manylinux-buildfs /
+COPY --from=build_libjpeg_turbo /manylinux-buildfs /
+COPY --from=build_zstd /manylinux-buildfs /
+COPY build_scripts/build-libtiff.sh /opt/_internal/build_scripts/
+RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
+    export LIBTIFF_VERSION=4.6.0 && \
+    export LIBTIFF_HASH=e178649607d1e22b51cf361dd20a3753f244f022eefab1f2f218fc62ebaf87d2 && \
+    export LIBTIFF_DOWNLOAD_URL=https://download.osgeo.org/libtiff && \
+    /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/build-libtiff.sh
+
+
+FROM build_base AS build_brotli
+COPY build_scripts/build-brotli.sh /opt/_internal/build_scripts/
+RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
+    export BROTLI_VERSION=1.1.0 && \
+    export BROTLI_HASH=e720a6ca29428b803f4ad165371771f5398faba397edf6778837a18599ea13ff && \
+    export BROTLI_DOWNLOAD_URL=https://github.com/google/brotli/archive/refs/tags && \
+    /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/build-brotli.sh
+
+
+# FreeType is built WITHOUT HarfBuzz (see build-freetype.sh) so that HarfBuzz can
+# be built afterwards WITH FreeType support -- Pillow's vendored raqm needs
+# HarfBuzz's hb-ft integration, which requires linking against libfreetype.
+FROM build_base AS build_freetype
+COPY --from=build_zlib /manylinux-buildfs /
+COPY --from=build_libpng /manylinux-buildfs /
+COPY --from=build_brotli /manylinux-buildfs /
+COPY build_scripts/build-freetype.sh /opt/_internal/build_scripts/
+RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
+    export FREETYPE_VERSION=2.14.3 && \
+    export FREETYPE_HASH=36bc4f1cc413335368ee656c42afca65c5a3987e8768cc28cf11ba775e785a5f && \
+    export FREETYPE_DOWNLOAD_URL=https://download.savannah.gnu.org/releases/freetype && \
+    /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/build-freetype.sh
+
+
+# HarfBuzz is built AFTER FreeType and links against it (HB_HAVE_FREETYPE=ON) so
+# that hb-ft.h and the hb_ft_* symbols exist for Pillow's vendored raqm.
+FROM build_base AS build_harfbuzz
+COPY --from=build_zlib /manylinux-buildfs /
+COPY --from=build_bzip2 /manylinux-buildfs /
+COPY --from=build_libpng /manylinux-buildfs /
+COPY --from=build_brotli /manylinux-buildfs /
+COPY --from=build_freetype /manylinux-buildfs /
+COPY build_scripts/build-harfbuzz.sh /opt/_internal/build_scripts/
+RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
+    export HARFBUZZ_VERSION=10.4.0 && \
+    export HARFBUZZ_HASH=480b6d25014169300669aa1fc39fb356c142d5028324ea52b3a27648b9beaad8 && \
+    export HARFBUZZ_DOWNLOAD_URL=https://github.com/harfbuzz/harfbuzz/releases/download/10.4.0 && \
+    /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/build-harfbuzz.sh
+
+
+FROM build_base AS build_libwebp
+COPY --from=build_zlib /manylinux-buildfs /
+COPY --from=build_libpng /manylinux-buildfs /
+COPY --from=build_libtiff /manylinux-buildfs /
+COPY --from=build_libjpeg_turbo /manylinux-buildfs /
+COPY build_scripts/build-libwebp.sh /opt/_internal/build_scripts/
+RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
+    export LIBWEBP_VERSION=1.4.0 && \
+    export LIBWEBP_HASH=61f873ec69e3be1b99535634340d5bde750b2e4447caa1db9f61be3fd49ab1e5 && \
+    export LIBWEBP_DOWNLOAD_URL=https://storage.googleapis.com/downloads.webmproject.org/releases/webp && \
+    /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/build-libwebp.sh
+
+
+FROM build_base AS build_lcms2
+COPY build_scripts/build-lcms2.sh /opt/_internal/build_scripts/
+RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
+    export LCMS2_VERSION=2.16 && \
+    export LCMS2_HASH=d873d34ad8b9b4cea010631f1a6228d2087475e4dc5e763eb81acc23d9d45a51 && \
+    export LCMS2_DOWNLOAD_URL=https://github.com/mm2/Little-CMS/releases/download/lcms2.16 && \
+    /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/build-lcms2.sh
+
+
+FROM build_base AS build_openjpeg
+COPY --from=build_zlib /manylinux-buildfs /
+COPY --from=build_libpng /manylinux-buildfs /
+COPY --from=build_libtiff /manylinux-buildfs /
+COPY build_scripts/build-openjpeg.sh /opt/_internal/build_scripts/
+RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
+    export OPENJPEG_VERSION=2.5.4 && \
+    export OPENJPEG_HASH=a695fbe19c0165f295a8531b1e4e855cd94d0875d2f88ec4b61080677e27188a && \
+    export OPENJPEG_DOWNLOAD_URL=https://github.com/uclouvain/openjpeg/archive/refs/tags && \
+    /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/build-openjpeg.sh
+
+
+FROM build_base AS build_aom
+COPY build_scripts/build-aom.sh /opt/_internal/build_scripts/
+RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
+    export AOM_VERSION=3.12.1 && \
+    export AOM_HASH=9e9775180dec7dfd61a79e00bda3809d43891aee6b2e331ff7f26986207ea22e && \
+    export AOM_DOWNLOAD_URL=https://storage.googleapis.com/aom-releases && \
+    /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/build-aom.sh
+
+
+FROM build_base AS build_libavif
+COPY --from=build_zlib /manylinux-buildfs /
+COPY --from=build_libpng /manylinux-buildfs /
+COPY --from=build_libjpeg_turbo /manylinux-buildfs /
+COPY --from=build_aom /manylinux-buildfs /
+COPY build_scripts/build-libavif.sh /opt/_internal/build_scripts/
+RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
+    export LIBAVIF_VERSION=1.4.2 && \
+    export LIBAVIF_HASH=2b645287340ba5a631d268b551dc2d72bd73ac33335962dd36dcdb6d8366921d && \
+    export LIBAVIF_DOWNLOAD_URL=https://github.com/AOMediaCodec/libavif/archive/refs/tags && \
+    /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/build-libavif.sh
+
+
+FROM build_base AS build_ffmpeg
+COPY --from=build_zlib /manylinux-buildfs /
+COPY build_scripts/build-ffmpeg.sh /opt/_internal/build_scripts/
+RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
+    export FFMPEG_VERSION=8.0.3 && \
+    export FFMPEG_HASH=6136812ea6d4e68bdba27e33c2a94382711cdf4f8602ffef056ff792bd6f9818 && \
+    export FFMPEG_DOWNLOAD_URL=https://ffmpeg.org/releases && \
+    /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/build-ffmpeg.sh
+
+
+FROM --platform=${BUILDPLATFORM} ghcr.io/sigstore/cosign/cosign:v${MANYLINUX_COSIGN_VERSION} AS cosign-bin
+
+
+FROM build_base AS build_cpython
+COPY --from=build_tcl_tk /manylinux-buildfs /
+COPY --from=build_mpdecimal /manylinux-buildfs /
+COPY --from=build_zstd /manylinux-buildfs /
+COPY --from=build_sqlite3 /manylinux-buildfs /
+RUN ldconfig
+# Two OpenSSL builds, from two different upstream lines, with two different
+# consumers. See build-openssl-static.sh for why the second one exists and how
+# its prefix stays isolated from the shared build.
+#
+# The shared build is what CPython, curl and everything auditwheel bundles into
+# a wheel link against (currently cmake and snowflake-connector-python). It has
+# to stay on 3.x: OpenSSL 4.0 made struct asn1_string_st opaque, and CPython
+# 3.12's Modules/_ssl.c still dereferences it directly -- name->d.ip->length,
+# uri->data and six more -- so 3.12.12 against 4.0.2 dies with eight
+# "incomplete definition of type 'ASN1_OCTET_STRING'" errors. Moving this pin
+# to 4.x needs a CPython that went through ASN1_STRING_get0_data() first.
+#
+# The static build is reachable only by a package that asks for it by setting
+# OPENSSL_DIR and OPENSSL_STATIC, which today means cryptography alone. It
+# tracks 4.x because cryptography's own PyPI wheels are built against 4.x, and
+# nothing on that path goes through CPython's _ssl.
+#
+# Track the newest upstream release of each line here. Parity review compares
+# the OpenSSL version embedded in our wheels against the PyPI ones, and both
+# builds end up inside wheels.
+#
+# The shared build is repeated here rather than copied from build_openssl
+# because build-openssl.sh also removes UBI's openssl-devel from the stage it
+# runs in, and CPython's configure is sensitive to what else is installed
+# alongside it. The pin lives in OPENSSL_SHARED_ROOT so the two cannot drift.
+COPY build_scripts/build-openssl.sh build_scripts/build-openssl-static.sh /opt/_internal/build_scripts/
+ARG OPENSSL_SHARED_ROOT
+ARG OPENSSL_SHARED_HASH
+RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
+    export OPENSSL_ROOT=${OPENSSL_SHARED_ROOT} && \
+    export OPENSSL_HASH=${OPENSSL_SHARED_HASH} && \
+    export OPENSSL_DOWNLOAD_URL=https://github.com/openssl/openssl/releases/download/${OPENSSL_ROOT} && \
+    /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/build-openssl.sh
+RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
+    export OPENSSL_ROOT=openssl-4.0.2 && \
+    export OPENSSL_HASH=736b467530f916737b7031310ccb21d8218c6229e61e8e160cd1d3458cd543a8 && \
+    export OPENSSL_DOWNLOAD_URL=https://github.com/openssl/openssl/releases/download/${OPENSSL_ROOT} && \
+    /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/build-openssl-static.sh
+COPY --from=cosign-bin /ko-app/cosign /usr/local/bin/cosign
+COPY build_scripts/build-cpython.sh /opt/_internal/build_scripts/
+
+
+FROM build_cpython AS build_cpython312
+COPY --from=build_zlib /manylinux-buildfs /
+COPY --from=build_bzip2 /manylinux-buildfs /
+COPY --from=build_libpng /manylinux-buildfs /
+COPY --from=build_libtiff /manylinux-buildfs /
+COPY --from=build_brotli /manylinux-buildfs /
+COPY --from=build_harfbuzz /manylinux-buildfs /
+COPY --from=build_freetype /manylinux-buildfs /
+COPY --from=build_libwebp /manylinux-buildfs /
+COPY --from=build_lcms2 /manylinux-buildfs /
+COPY --from=build_openjpeg /manylinux-buildfs /
+COPY --from=build_aom /manylinux-buildfs /
+COPY --from=build_libavif /manylinux-buildfs /
+COPY --from=build_libjpeg_turbo /manylinux-buildfs /
+COPY --from=build_libyaml /manylinux-buildfs /
+COPY --from=build_libxml2 /manylinux-buildfs /
+COPY --from=build_libxslt /manylinux-buildfs /
+COPY --from=build_libffi /manylinux-buildfs /
+COPY --from=build_openblas /manylinux-buildfs /
+COPY --from=build_libomp /manylinux-buildfs /
+COPY --from=build_arrow /manylinux-buildfs /
+ARG MANYLINUX_DISABLE_CLANG_FOR_CPYTHON
+RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
+    /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/build-cpython.sh thomas@python.org https://accounts.google.com 3.12.12
+
+
+FROM scratch AS merged_buildfs
+COPY --from=build_zlib /manylinux-buildfs /
+COPY --from=build_bzip2 /manylinux-buildfs /
+COPY --from=build_libpng /manylinux-buildfs /
+COPY --from=build_libtiff /manylinux-buildfs /
+COPY --from=build_brotli /manylinux-buildfs /
+COPY --from=build_harfbuzz /manylinux-buildfs /
+COPY --from=build_freetype /manylinux-buildfs /
+COPY --from=build_libwebp /manylinux-buildfs /
+COPY --from=build_lcms2 /manylinux-buildfs /
+COPY --from=build_openjpeg /manylinux-buildfs /
+COPY --from=build_aom /manylinux-buildfs /
+COPY --from=build_libavif /manylinux-buildfs /
+COPY --from=build_libjpeg_turbo /manylinux-buildfs /
+COPY --from=build_libyaml /manylinux-buildfs /
+COPY --from=build_libxml2 /manylinux-buildfs /
+COPY --from=build_libxslt /manylinux-buildfs /
+COPY --from=build_libffi /manylinux-buildfs /
+COPY --from=build_openblas /manylinux-buildfs /
+COPY --from=build_libomp /manylinux-buildfs /
+COPY --from=build_arrow /manylinux-buildfs /
+COPY --from=build_ffmpeg /manylinux-buildfs /
+
+
+FROM runtime_base
+COPY --from=build_tcl_tk /manylinux-rootfs /
+COPY --from=build_mpdecimal /manylinux-rootfs /
+COPY --from=build_zstd /manylinux-rootfs /
+COPY --from=build_sqlite3 /manylinux-rootfs /
+COPY --from=build_git /manylinux-rootfs /
+COPY --from=build_rust /manylinux-rootfs /
+COPY --from=build_zlib /manylinux-rootfs /
+COPY --from=build_bzip2 /manylinux-rootfs /
+COPY --from=build_libpng /manylinux-rootfs /
+COPY --from=build_libtiff /manylinux-rootfs /
+COPY --from=build_brotli /manylinux-rootfs /
+COPY --from=build_harfbuzz /manylinux-rootfs /
+COPY --from=build_freetype /manylinux-rootfs /
+COPY --from=build_libwebp /manylinux-rootfs /
+COPY --from=build_lcms2 /manylinux-rootfs /
+COPY --from=build_openjpeg /manylinux-rootfs /
+COPY --from=build_aom /manylinux-rootfs /
+COPY --from=build_libavif /manylinux-rootfs /
+COPY --from=build_libjpeg_turbo /manylinux-rootfs /
+COPY --from=build_libyaml /manylinux-rootfs /
+COPY --from=build_libxml2 /manylinux-rootfs /
+COPY --from=build_libxslt /manylinux-rootfs /
+COPY --from=build_libffi /manylinux-rootfs /
+COPY --from=build_openblas /manylinux-rootfs /
+COPY --from=build_libomp /manylinux-rootfs /
+COPY --from=build_arrow /manylinux-rootfs /
+COPY --from=build_ffmpeg /manylinux-rootfs /
+RUN find /opt/_internal -name '*.so' -printf '%h\n' | sort -u >> /etc/ld.so.conf.d/00-manylinux.conf && \
+    ldconfig
+
+# Copy build-time files (headers, pkgconfig) needed for building wheels
+COPY --from=merged_buildfs /opt /opt
+COPY --from=merged_buildfs /usr/local/lib/pkgconfig /usr/local/lib/pkgconfig
+COPY --from=merged_buildfs /usr/local/lib/cmake /usr/local/lib/cmake
+COPY --from=merged_buildfs /usr/local/include /usr/local/include
+# Create symlinks in standard paths so build systems that don't use pkg-config
+# (e.g. PyYAML's setup.py) can find our source-built headers and libraries
+RUN for dir in /opt/_internal/lib*/include /opt/_internal/openblas*/include /opt/_internal/zlib*/include /opt/_internal/bzip2*/include /opt/_internal/libomp*/include /opt/_internal/freetype*/include /opt/_internal/lcms2*/include /opt/_internal/openjpeg*/include /opt/_internal/aom*/include /opt/_internal/brotli*/include /opt/_internal/harfbuzz*/include /opt/_internal/ffmpeg*/include; do \
+        [ -d "$dir" ] || continue; \
+        for item in "$dir"/*; do \
+            ln -sf "$item" /usr/local/include/; \
+        done; \
+    done && \
+    for dir in /opt/_internal/lib*/lib /opt/_internal/openblas*/lib /opt/_internal/zlib*/lib /opt/_internal/bzip2*/lib /opt/_internal/libomp*/lib /opt/_internal/freetype*/lib /opt/_internal/lcms2*/lib /opt/_internal/openjpeg*/lib /opt/_internal/aom*/lib /opt/_internal/brotli*/lib /opt/_internal/harfbuzz*/lib /opt/_internal/ffmpeg*/lib; do \
+        [ -d "$dir" ] || continue; \
+        for lib in "$dir"/lib*.so; do \
+            [ -f "$lib" ] && ln -sf "$lib" /usr/local/lib/; \
+        done; \
+    done
+COPY build_scripts /opt/_internal/build_scripts/
+RUN    --mount=type=bind,target=/build_cpython312,from=build_cpython312 \
+    --mount=type=bind,target=/build_cpython_base,from=build_cpython \
+    mkdir -p /opt/_internal && \
+    cp -rf /build_cpython*/opt/_internal/cpython* /opt/_internal/ && \
+    if test -n "$(find /build_cpython_base/opt/_internal -maxdepth 1 -name 'openssl*' -print -quit)"; then cp -rf /build_cpython_base/opt/_internal/openssl* /opt/_internal/; fi && \
+    if test -n "$(find /build_cpython_base/opt/_internal -maxdepth 1 -name 'static-openssl*' -print -quit)"; then cp -rf /build_cpython_base/opt/_internal/static-openssl* /opt/_internal/; fi && \
+    manylinux-entrypoint /opt/_internal/build_scripts/finalize.sh \
+      pp311-pypy311_pp73
+# build-openssl-static.sh asserts the legacy provider is in libcrypto.a, but it
+# runs in build_cpython, two stages back, and cannot see anything that happens
+# to the archive after that -- finalize.sh above purges *.a out of
+# /opt/_internal. Re-assert on the finished filesystem, where a wheel would
+# actually find it.
+RUN set -e && \
+    STATIC_LIBCRYPTO=/opt/_internal/static-openssl/lib/libcrypto.a && \
+    if [ ! -f "${STATIC_LIBCRYPTO}" ]; then \
+        echo "ERROR: ${STATIC_LIBCRYPTO} is missing from the final image." >&2; \
+        echo "The static OpenSSL built, but something between that stage and" >&2; \
+        echo "here removed its archives -- check the *.a purge in" >&2; \
+        echo "build_scripts/finalize.sh. A wheel setting OPENSSL_DIR and" >&2; \
+        echo "OPENSSL_STATIC cannot link against headers alone." >&2; \
+        exit 1; \
+    fi && \
+    LEGACY_SYMS=$(nm "${STATIC_LIBCRYPTO}" | grep -c ossl_legacy_provider_init || true) && \
+    if [ "${LEGACY_SYMS}" -eq 0 ]; then \
+        echo "ERROR: ${STATIC_LIBCRYPTO} survived but has no" >&2; \
+        echo "ossl_legacy_provider_init; a wheel linking it would silently lose" >&2; \
+        echo "Blowfish, CAST5, IDEA, SEED, ARC4 and RC2." >&2; \
+        exit 1; \
+    fi
+# Make source-built OpenSSL available system-wide so packages like cmake and
+# duckdb find it instead of the old system OpenSSL 1.1.1k headers
+RUN set -e && \
+    for dir in /opt/_internal/openssl*/include/*; do \
+        [ -d "$dir" ] && ln -sf "$dir" /usr/local/include/; \
+    done; \
+    for lib in /opt/_internal/openssl*/lib/lib*.so*; do \
+        [ -f "$lib" ] && ln -sf "$lib" /usr/local/lib/; \
+    done; \
+    for pc in /opt/_internal/openssl*/lib/pkgconfig/*.pc; do \
+        [ -f "$pc" ] && ln -sf "$pc" /usr/local/lib/pkgconfig/; \
+    done; \
+    ldconfig
+
+COPY tests /opt/_internal/tests/
+
+ENV SSL_CERT_FILE=/opt/_internal/certs.pem
+
+WORKDIR /src
+# perl-IPC-Cmd is a build tool (not bundled in wheels)
+# cmake needed for CMake-based builds (libjpeg-turbo, libtiff, openblas)
+RUN dnf -y install \
+    --setopt install_weak_deps=0 \
+    perl-IPC-Cmd \
+    cmake \
+    zip \
+    unzip \
+    && dnf clean all \
+    && rm -rf /var/cache/dnf
+COPY requirements.txt .
+RUN cpython3.12 -m venv venv
+RUN venv/bin/python -m pip install -r requirements.txt --no-deps --no-cache-dir --require-hashes
+
+COPY scripts/* /usr/local/bin/
+COPY overrides/settings.yaml /usr/local/share/fromager/overrides/settings.yaml
+COPY overrides/patches /usr/local/share/fromager/overrides/patches
+COPY overrides/package_plugins /src/package_plugins
+RUN venv/bin/pip install --no-deps /src/package_plugins
+
+RUN \
+    ln -s /src/venv/bin/python /usr/local/bin/python3 && \
+    ln -s /src/venv/bin/fromager /usr/local/bin/fromager && \
+    ln -s /src/venv/bin/wheel /usr/local/bin/wheel
+
+ENV PYTHONUNBUFFERED=1
+CMD ["bash"]

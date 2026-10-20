@@ -1,0 +1,7 @@
+---
+sbom:
+  supplier: "Organization: Red Hat"
+  namespace: "https://www.redhat.com"
+  creators:
+    - "Organization: Red Hat"
+  repository_url: "https://packages.redhat.com"
