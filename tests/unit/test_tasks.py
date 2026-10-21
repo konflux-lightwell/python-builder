@@ -11,7 +11,7 @@ from lightwell_python.runtime import (
     sha256,
     write_json,
 )
-from lightwell_python.tasks import index, sdist, source, wheels
+from lightwell_python.tasks import sdist, source, wheels
 
 from .conftest import FakeRegistry, FakeRunner
 
@@ -229,83 +229,6 @@ def test_wheels_do_not_publish_unauthorized_build(tmp_path, wheel_input, make_wh
     assert not any(call[0] == "push" for call in registry.calls)
     assert not (tmp_path / "results").exists()
     assert not (tmp_path / "manifest-output.json").exists()
-
-
-@pytest.mark.parametrize(
-    "build_type,computed,require",
-    [
-        (BuildType.BACKPORT, "1.0+rhlw.2", True),
-        (BuildType.NOVEL, "1.0+rhlw.2.n.1", True),
-        (BuildType.VALIDATED, "1.0", False),
-    ],
-)
-def test_index_complete_task(tmp_path, git_repo, build_type, computed, require):
-    repo, _ = git_repo
-    manifest = tmp_path / "manifest-input"
-    write_json(
-        manifest / "build-manifest.json",
-        {
-            "produced": [{"name": "companion", "version": "2.0"}],
-            "cached": [{"name": "cached", "version": "3.0"}],
-        },
-    )
-    work = tmp_path / "task"
-    work.mkdir()
-    registry = FakeRegistry()
-
-    def generate(args, kwargs):
-        write_json(
-            Path(args[args.index("--output") + 1]),
-            {
-                "primaryPurl": f"pkg:pypi/demo@{computed}",
-                "vulns": ["CVE-2026-12345"] if require else [],
-            },
-        )
-
-    runner = FakeRunner(generate)
-    index.run(
-        workdir=work,
-        results=tmp_path / "results",
-        package=Package("demo", "1.0"),
-        computed=computed,
-        build_type=build_type,
-        source_dir=repo,
-        image_ref=registry.reference,
-        manifest_path=manifest / "build-manifest.json",
-        registry=registry,
-        runner=runner,
-    )
-    args = runner.calls[0][0]
-    assert ("--require-vuln" in args) is require
-    assert "--produced-purl" in args and "--extra-purl" in args
-    assert (tmp_path / "results/BUILD_INDEX_DIGEST").read_text() == "sha256:" + sha256(
-        work / "build-index.json"
-    )
-    assert registry.calls[-1][0] == "attach"
-
-
-def test_index_generation_failure_never_attaches(tmp_path, git_repo):
-    repo, _ = git_repo
-    work = tmp_path / "task"
-    work.mkdir()
-    registry = FakeRegistry()
-
-    def fail(args, kwargs):
-        raise TaskError("No resolvable vulnerabilities")
-
-    with pytest.raises(TaskError):
-        index.run(
-            workdir=work,
-            results=tmp_path / "results",
-            package=Package("demo", "1.0"),
-            computed="1.0+rhlw.1",
-            build_type=BuildType.BACKPORT,
-            source_dir=repo,
-            image_ref=registry.reference,
-            registry=registry,
-            runner=FakeRunner(fail),
-        )
-    assert not any(call[0] == "attach" for call in registry.calls)
 
 
 def test_source_failure_does_not_expose_handoff(tmp_path, git_repo):

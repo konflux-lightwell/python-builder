@@ -1,4 +1,4 @@
-"""Publish final OCI images, SBOMs, and indexes; trusted artifacts are owned by Tekton."""
+"""Publish final OCI images and SBOMs; trusted artifacts are owned by Tekton."""
 
 from __future__ import annotations
 
@@ -82,7 +82,7 @@ class Registry:
     """Publish final build images and attachments through external OCI tools.
 
     Trusted artifact transport belongs to separate Tekton steps. This adapter only
-    handles final images, SBOMs, and build indexes.
+    handles final images and SBOMs.
 
     Attributes:
         runner: Process adapter used for ORAS and cosign execution.
@@ -160,34 +160,6 @@ class Registry:
             if tags:
                 self.runner.run(["oras", "tag", "--registry-config", auth, ref, *tags], attempts=3)
         return ref
-
-    def attach(self, reference: str, path: Path, media_type: str) -> None:
-        """Attach a file to a digest-pinned image as an OCI referrer.
-
-        Args:
-            reference: Immutable image reference receiving the attachment.
-            path: Local file to attach, retaining its basename for downstream consumers.
-            media_type: Artifact and layer media type required by the consumer.
-
-        Raises:
-            TaskError: The subject is not digest-pinned or attachment fails.
-        """
-        reference = pinned(reference)
-        with self.auth(reference) as auth:
-            self.runner.run(
-                [
-                    "oras",
-                    "attach",
-                    reference,
-                    "--registry-config",
-                    auth,
-                    "--artifact-type",
-                    media_type,
-                    f"{path.name}:{media_type}",
-                ],
-                cwd=path.parent,
-                attempts=3,
-            )
 
     def attach_sbom(self, reference: str, sbom: Path) -> str:
         """Attach an SPDX SBOM with cosign and return its content address.

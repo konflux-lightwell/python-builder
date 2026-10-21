@@ -80,18 +80,15 @@ def test_registry_credentials_cleanup_and_push(tmp_path):
         assert not Path(args[args.index("--registry-config") + 1]).exists()
 
 
-def test_attach_and_sbom_digest(tmp_path):
-    payload = tmp_path / "build-index.json"
+def test_attach_sbom_digest(tmp_path):
+    payload = tmp_path / "sbom.spdx.json"
     payload.write_text("{}")
     runner = FakeRunner()
     registry = Registry(runner)
     ref = "registry.test/repo@sha256:" + "a" * 64
-    registry.attach(ref, payload, "application/vnd.lightwell.build-index.v1+json")
     result = registry.attach_sbom(ref, payload)
     assert result == "registry.test/repo@sha256:" + sha256(payload)
-    assert runner.calls[0][1]["cwd"] == tmp_path
-    assert runner.calls[0][0][-1].startswith("build-index.json:")
-    assert not Path(runner.calls[1][1]["env"]["DOCKER_CONFIG"]).exists()
+    assert not Path(runner.calls[0][1]["env"]["DOCKER_CONFIG"]).exists()
 
 
 def test_runner_never_evaluates_shell_syntax(tmp_path):

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from urllib.parse import quote
 
 from packaging.utils import canonicalize_name
 from packaging.version import Version
@@ -66,47 +65,3 @@ def build_manifest(output: Path, build_type: BuildType, allowed: frozenset[str])
             {"name": name, "version": version} for name, version in sorted(cached - produced)
         ],
     }
-
-
-def manifest_arguments(manifest: dict, primary: str) -> list[str]:
-    """Translate companion manifest entries into fath-cuan arguments.
-
-    Args:
-        manifest: Build manifest containing produced and cached distribution lists.
-        primary: Primary distribution, already supplied through fath-cuan's --purl.
-
-    Returns:
-        A flat argument vector using --produced-purl and --extra-purl. The primary
-        distribution is omitted and produced PURLs take precedence over cached ones.
-
-    Raises:
-        TaskError: A category or entry does not follow the manifest schema.
-    """
-    produced = _manifest_purls(manifest, "produced", primary)
-    cached = _manifest_purls(manifest, "cached", primary)
-
-    arguments = []
-    for purl in sorted(produced):
-        arguments.extend(["--produced-purl", purl])
-    for purl in sorted(cached - produced):
-        arguments.extend(["--extra-purl", purl])
-    return arguments
-
-
-def _manifest_purls(manifest: dict, category: str, primary: str) -> set[str]:
-    """Read one manifest category, excluding the primary distribution."""
-    entries = manifest.get(category, [])
-    if not isinstance(entries, list):
-        raise TaskError(f"Manifest {category} must be a list")
-
-    primary_name = canonicalize_name(primary)
-    result = set()
-    for entry in entries:
-        if not isinstance(entry, dict) or not entry.get("name") or not entry.get("version"):
-            raise TaskError("Manifest entry is missing identity/version")
-        name = canonicalize_name(entry["name"], validate=True)
-        version = str(entry["version"])
-        Version(version)
-        if name != primary_name:
-            result.add(f"pkg:pypi/{name}@{quote(version, safe='')}")
-    return result

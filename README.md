@@ -32,7 +32,10 @@ entrypoints into the execution image is part of the next migration stage.
 | `source-to-sdist` | `lightwell-source-to-sdist` |
 | `python-fromager-build-wheels` | `lightwell-build-wheels` |
 | `python-fromager-build-sdist` | `lightwell-build-sdist` |
-| `attach-build-index` | `lightwell-attach-build-index` |
+
+Build-index generation and attachment belong to the fath-cuan repository,
+including its `fath-cuan-attach-build-index` CLI and `tekton/task/attach-build-index`
+definition. The wheels task retains `MANIFEST_ARTIFACT` for that consumer.
 
 Use `--help` on any command for its complete input contract. Arguments also read
 uppercase underscore environment variables (`--build-type` → `BUILD_TYPE`).
@@ -90,8 +93,7 @@ for each task's paths and result ownership.
 Build logic, JSON handling, hashing, package sdist/wheel manipulation, and final
 OCI image publication are Python. Trusted artifact packing, integrity checks,
 restoration, and publication stay with the existing trusted-artifact image. External
-programs supply domain functionality: Git, Fromager, auditwheel, ORAS, cosign,
-and fath-cuan. Python does not invoke the trusted-artifact image or its helpers,
+programs supply domain functionality: Git, Fromager, auditwheel, ORAS, and cosign. Python does not invoke the trusted-artifact image or its helpers,
 or run scripts copied from the config repository.
 Build backends and Fromager plugins may themselves require native toolchains.
 

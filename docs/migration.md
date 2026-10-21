@@ -25,8 +25,11 @@ the builder toolchain and its separate plugin are distributed through the image.
 
 ## Scope and runtime boundaries
 
-The three local tasks in `python-build` and the local normalization task in
-`python-sdist-ingest` each have one Python entrypoint. Shared catalog tasks
+Source preparation and wheel building in `python-build`, plus normalization
+in `python-sdist-ingest`, each have one Python entrypoint.
+Build-index generation and attachment have moved to the fath-cuan repository,
+with its own `fath-cuan-attach-build-index` entrypoint and
+`tekton/task/attach-build-index` definition. Shared catalog tasks
 (git clone, upstream source acquisition, ClamAV) retain their existing owners.
 `oci-verify-import` belongs to the external artifact import flow and is outside
 this Python source/wheel pipeline migration.
@@ -40,7 +43,7 @@ injectable adapters, allowing unit tests to exercise complete task flows without
 network services. There is no generic workflow engine or shell evaluation.
 
 External domain tools remain required: Git, Fromager, auditwheel (native wheels),
-ORAS, cosign, and fath-cuan. Tool versions and builder plugins must be pinned in
+ORAS, and cosign. Tool versions and builder plugins must be pinned in
 the future Python execution image. The trusted-artifact steps keep their existing
 image and digest pins. The package supports Python >=3.11.4.
 Runtime testing here covers local Git and ORAS; full builds, authenticated registry
@@ -53,7 +56,6 @@ pushes, vulnerability resolution, and cluster execution need staging validation.
 | source-to-sdist | SOURCE_ARTIFACT → `/var/workdir/source-repo-readonly` | `--source-dir /var/workdir/source-repo-readonly --sdists-output /var/workdir/sdists-repo` | `/var/workdir/sdists-repo` → SDISTS_ARTIFACT |
 | python-fromager-build-wheels | SDISTS_ARTIFACT → `/var/workdir/sdists-repo` | `--sdists-dir /var/workdir/sdists-repo --manifest-output /var/workdir/build-manifest.json` | `/var/workdir/build-manifest.json` → MANIFEST_ARTIFACT |
 | python-fromager-build-sdist | SDISTS_ARTIFACT → `/var/workdir/sdists-repo` | `--sdists-dir /var/workdir/sdists-repo` | None; Python publishes the final sdist OCI image |
-| attach-build-index | SOURCE_ARTIFACT → `/var/workdir/source`; optional MANIFEST_ARTIFACT → `/var/workdir/manifest` | `--source-dir /var/workdir/source`; `--manifest-path /var/workdir/manifest/build-manifest.json` when provided | None; Python attaches the final index |
 
 Each `use` or `create` step runs in `quay.io/konflux-ci/build-trusted-artifacts`
 with the existing pinned digest. For example, source-to-sdist keeps this sequence:
@@ -70,8 +72,7 @@ Python stages the manifest only after image and SBOM publication succeed.
 All steps share the workdir volume. The declared handoff paths are stable even
 though Python's internal scratch directory is unique per invocation. Use fresh
 handoff/output paths for each task run. Run `create` only after Python succeeds;
-the task succeeds only when its final required step succeeds. Omit both the
-optional manifest restore and `--manifest-path` when no manifest is supplied.
+the task succeeds only when its final required step succeeds.
 
 ## Preserved behavior
 
@@ -92,9 +93,8 @@ optional manifest restore and `--manifest-path` when no manifest is supplied.
   Produced entries take precedence over identical cached entries.
 - Ingestion carries acquired origin/provenance evidence unchanged, publishing a
   normalized root sdist and the same byte-binding transformation schema.
-- Build-index generation delegates ADR-0005 trailer interpretation to fath-cuan.
-  Remediated builds require resolvable vulnerabilities; Validated skips that gate.
-  Companion PURLs are deduplicated, and the index retains its basename/media type.
+- Fath-cuan owns index generation, attachment, and companion-PURL handling.
+  The wheels task continues to emit the produced/cached build manifest for it.
 - Existing task result names remain unchanged. Trusted artifact URIs identify
   archive **blob** digests, whereas IMAGE_DIGEST identifies an OCI **manifest**.
 

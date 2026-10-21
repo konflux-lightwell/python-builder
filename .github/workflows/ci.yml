@@ -30,4 +30,3 @@ jobs:
       - run: uv run --no-sync lightwell-source-to-sdist --help
       - run: uv run --no-sync lightwell-build-wheels --help
       - run: uv run --no-sync lightwell-build-sdist --help
-      - run: uv run --no-sync lightwell-attach-build-index --help

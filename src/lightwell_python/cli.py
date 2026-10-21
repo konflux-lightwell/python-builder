@@ -11,14 +11,14 @@ from typing import Any
 
 from lightwell_python.registry import Registry
 from lightwell_python.runtime import BuildType, Package, Runner, TaskError
-from lightwell_python.tasks import index, sdist, source, wheels
+from lightwell_python.tasks import sdist, source, wheels
 
 
 def parser(task: str) -> argparse.ArgumentParser:
     """Build the command-line interface for a single pipeline task.
 
     Args:
-        task: One of source-to-sdist, build-wheels, build-sdist, or attach-build-index.
+        task: One of source-to-sdist, build-wheels, or build-sdist.
 
     Returns:
         A parser whose options also accept uppercase underscore environment defaults.
@@ -48,13 +48,13 @@ def parser(task: str) -> argparse.ArgumentParser:
     result.add_argument("--verbose", action="store_true")
     if task != "build-sdist":
         option("build-type", choices=[mode.value for mode in BuildType], required=True)
-    if task in {"source-to-sdist", "attach-build-index"}:
+    if task == "source-to-sdist":
         option("source-dir", type=Path, required=True)
     else:
         option("sdists-dir", type=Path, required=True)
         option("image", required=True)
         option("image-expires-after", default="")
-    if task in {"build-wheels", "attach-build-index"}:
+    if task == "build-wheels":
         option("computed-version", required=True)
     if task == "source-to-sdist":
         option("sdists-output", type=Path, required=True)
@@ -70,9 +70,6 @@ def parser(task: str) -> argparse.ArgumentParser:
     elif task == "build-sdist":
         option("git-url", required=True)
         option("revision", required=True)
-    elif task == "attach-build-index":
-        option("image-ref", required=True)
-        option("manifest-path", type=Path)
     else:
         raise ValueError(f"Unknown task: {task}")
     return result
@@ -155,16 +152,6 @@ def execute(task: str, argv: list[str] | None = None) -> int:
                 revision=args.revision,
                 image_expires=args.image_expires_after,
             )
-        else:
-            index.run(
-                **common,
-                build_type=BuildType(args.build_type),
-                computed=args.computed_version,
-                source_dir=args.source_dir.resolve(),
-                registry=registry,
-                image_ref=args.image_ref,
-                manifest_path=args.manifest_path.resolve() if args.manifest_path else None,
-            )
     except (TaskError, OSError, ValueError) as exc:
         logging.getLogger(__name__).error("%s", exc)
         return 1
@@ -184,8 +171,3 @@ def build_wheels() -> None:
 def build_sdist() -> None:
     """Run python-fromager-build-sdist from the installed console script."""
     raise SystemExit(execute("build-sdist"))
-
-
-def attach_build_index() -> None:
-    """Run attach-build-index from the installed console script."""
-    raise SystemExit(execute("attach-build-index"))

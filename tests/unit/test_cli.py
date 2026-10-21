@@ -53,20 +53,6 @@ from lightwell_python.runtime import TaskError
                 "abc",
             ],
         ),
-        (
-            "attach-build-index",
-            "index",
-            [
-                "--source-dir",
-                "source",
-                "--image-ref",
-                "registry/repo@sha256:" + "a" * 64,
-                "--build-type",
-                "Validated",
-                "--computed-version",
-                "1.0",
-            ],
-        ),
     ],
 )
 def test_cli_dispatches_all_task_inputs(tmp_path, monkeypatch, task, module, extra):
@@ -125,7 +111,6 @@ def test_environment_defaults_and_failures(tmp_path, monkeypatch):
         ("source_to_sdist", "source-to-sdist"),
         ("build_wheels", "build-wheels"),
         ("build_sdist", "build-sdist"),
-        ("attach_build_index", "attach-build-index"),
     ],
 )
 def test_installed_entrypoints_return_task_status(monkeypatch, entry, task):

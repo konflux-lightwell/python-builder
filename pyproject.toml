@@ -19,7 +19,6 @@ Repository = "https://github.com/konflux-lightwell/python-builder"
 lightwell-source-to-sdist = "lightwell_python.cli:source_to_sdist"
 lightwell-build-wheels = "lightwell_python.cli:build_wheels"
 lightwell-build-sdist = "lightwell_python.cli:build_sdist"
-lightwell-attach-build-index = "lightwell_python.cli:attach_build_index"
 
 [dependency-groups]
 dev = ["pytest>=8.3", "pytest-cov>=6", "ruff>=0.11", "mypy>=1.15", "types-PyYAML>=6"]

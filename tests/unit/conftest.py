@@ -111,9 +111,6 @@ class FakeRegistry:
         self.calls.append(("push", image, directory, artifact_type, annotations, tags))
         return self.reference
 
-    def attach(self, reference, path, media_type):
-        self.calls.append(("attach", reference, path, media_type))
-
     def attach_sbom(self, reference, sbom):
         self.calls.append(("sbom", reference, sbom))
         return reference

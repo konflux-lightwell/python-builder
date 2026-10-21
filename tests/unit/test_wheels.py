@@ -14,7 +14,7 @@ from lightwell_python.build import (
     repair_wheels,
     run_fromager,
 )
-from lightwell_python.manifest import build_manifest, manifest_arguments
+from lightwell_python.manifest import build_manifest
 from lightwell_python.runtime import BuildType, Package, TaskError, write_json
 from lightwell_python.wheel_metadata import (
     patch_sbom,
@@ -167,23 +167,6 @@ def test_validated_accepts_dependency_closure(tmp_path):
     )
     assert build_manifest(tmp_path, BuildType.VALIDATED, frozenset())["produced"] == [
         {"name": "dep", "version": "2.0"}
-    ]
-
-
-def test_manifest_arguments_canonicalize_deduplicate_and_encode():
-    entry = {"name": "Some_Pkg", "version": "1.0+rhlw.1"}
-    result = manifest_arguments(
-        {
-            "produced": [entry, entry, {"name": "demo", "version": "1"}],
-            "cached": [entry, {"name": "dep", "version": "2"}],
-        },
-        "demo",
-    )
-    assert result == [
-        "--produced-purl",
-        "pkg:pypi/some-pkg@1.0%2Brhlw.1",
-        "--extra-purl",
-        "pkg:pypi/dep@2",
     ]
 
 
