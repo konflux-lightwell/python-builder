@@ -1,0 +1,172 @@
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: source-to-sdist
+  annotations:
+    tekton.dev/pipelines.minVersion: 1.0.0
+    tekton.dev/tags: python, sdist, lightwell, konflux
+  labels:
+    app.kubernetes.io/version: '0.2'
+spec:
+  description: >-
+    Restore source with build-trusted-artifacts, compute its version, resolve build configuration,
+    and stage a deterministic sdist using lightwell-source-to-sdist. Publish the staged directory
+    in a separate trusted-artifact create step.
+
+  params:
+    - name: SOURCE_ARTIFACT
+      description: >-
+        The Trusted Artifact URI pointing to the cloned lightwell-builds repository. Produced
+        by git-clone-oci-ta with full git history (depth=0, fetchTags=true). The repo must have
+        source content in its source/ subdirectory.
+      type: string
+    - name: PACKAGE
+      description: >-
+        Canonical Python package name (PEP 503 normalized, hyphens only). For example: ntplib,
+        urllib3, pillow.
+      type: string
+    - name: VERSION
+      description: 'Package version string. For example: 0.4.0, 2.5.0.'
+      type: string
+    - name: LIGHTWELL_BUILDS_TAG
+      description: >-
+        Legacy compatibility parameter; version lineage is derived from canonical tags in the
+        restored Git history.
+      type: string
+    - name: BUILD_TYPE
+      description: "Build mode controlling version calculation. Accepted values:\n  Backport \
+        \ \u2014 remediated build, B/N from commits since ingestion tag.\n  Novel     \u2014 remediated\
+        \ build, B from ingestion\u2192baseline, N from baseline\u2192HEAD.\n  Validated \u2014\
+        \ upstream rebuild; no version suffix is applied."
+      type: string
+    - name: BUILD_CONFIGS_REPO_URL
+      description: Build-config registry URL, supplied by the orchestrator.
+      type: string
+    - name: BUILD_CONFIGS_REVISION
+      description: Build-config Git ref, supplied by the orchestrator.
+      type: string
+    - name: ociStorage
+      description: >-
+        OCI reference used as the store for Trusted Artifacts, such as a dedicated TA storage
+        image.
+      type: string
+    - name: ociArtifactExpiresAfter
+      description: 'Expiration for the TA OCI artifact. Empty means no expiry. Time values: 1h,
+        2d, 3w.'
+      type: string
+      default: ''
+    - name: caTrustConfigMapName
+      description: The name of the ConfigMap to read CA bundle data from.
+      type: string
+      default: trusted-ca
+    - name: caTrustConfigMapKey
+      description: The name of the key in the ConfigMap that contains the CA bundle data.
+      type: string
+      default: ca-bundle.crt
+    - name: PYTHON_BUILDER_IMAGE
+      type: string
+      description: >-
+        Digest-pinned execution image containing lightwell-python and this task's runtime tools.
+        See tekton/tasks/README.md.
+
+  workspaces:
+    - name: git-auth
+      description: Basic-auth credentials for cloning build-configs.
+      optional: false
+
+  results:
+    - name: SDISTS_ARTIFACT
+      description: >-
+        Trusted Artifact URI pointing to the sdists-repo/ directory containing the pre-placed
+        sdist tarball at downloads/<PACKAGE>-<VERSION>.tar.gz. Pass this to fromager-build-wheels
+        as SDISTS_ARTIFACT.
+    - name: COMPUTED_VERSION
+      description: 'Full version: upstream for Validated, or upstream+rhlw.B[.n.N] for remediated
+        builds.'
+    - name: B_VALUE
+      description: >-
+        Backport commit count from ingestion to HEAD (Backport), or ingestion to baseline (Novel);
+        zero for Validated.
+    - name: N_VALUE
+      description: Novel commit count from baseline to HEAD; zero for Backport and Validated.
+
+  volumes:
+    - name: trusted-ca
+      configMap:
+        items:
+          - key: $(params.caTrustConfigMapKey)
+            path: ca-bundle.crt
+        name: $(params.caTrustConfigMapName)
+        optional: true
+    - name: workdir
+      emptyDir: {}
+
+  stepTemplate:
+    volumeMounts:
+      - name: workdir
+        mountPath: /var/workdir
+    computeResources:
+      requests:
+        cpu: '1'
+        memory: 1Gi
+      limits:
+        cpu: '2'
+        memory: 2Gi
+
+  steps:
+    - name: use-trusted-artifact
+      image: quay.io/konflux-ci/build-trusted-artifacts:latest@sha256:2712c8a6453fc9db5fc4c2d9d952554a4eea46d2fdba47a272b79fa07f8c8c40
+      args:
+        - use
+        - $(params.SOURCE_ARTIFACT)=/var/workdir/source-repo-readonly
+      volumeMounts:
+        - mountPath: /etc/pki/tls/certs/ca-custom-bundle.crt
+          name: trusted-ca
+          readOnly: true
+          subPath: ca-bundle.crt
+
+    - name: source-to-sdist
+      image: $(params.PYTHON_BUILDER_IMAGE)
+      workingDir: /var/workdir
+      command:
+        - lightwell-source-to-sdist
+      args:
+        - --package=$(params.PACKAGE)
+        - --version=$(params.VERSION)
+        - --workdir=/var/workdir
+        - --results-dir=/tekton/results
+        - --ca-bundle=/mnt/trusted-ca/ca-bundle.crt
+        - --build-type=$(params.BUILD_TYPE)
+        - --source-dir=/var/workdir/source-repo-readonly
+        - --sdists-output=/var/workdir/sdists-repo
+        - --build-configs-repo-url=$(params.BUILD_CONFIGS_REPO_URL)
+        - --build-configs-revision=$(params.BUILD_CONFIGS_REVISION)
+        - --git-auth=$(workspaces.git-auth.path)
+      volumeMounts:
+        - name: trusted-ca
+          mountPath: /mnt/trusted-ca
+          readOnly: true
+
+    - name: create-sdists-artifact
+      image: quay.io/konflux-ci/build-trusted-artifacts:latest@sha256:2712c8a6453fc9db5fc4c2d9d952554a4eea46d2fdba47a272b79fa07f8c8c40
+      env:
+        - name: IMAGE_EXPIRES_AFTER
+          value: $(params.ociArtifactExpiresAfter)
+      args:
+        - create
+        - --store
+        - $(params.ociStorage)
+        - $(results.SDISTS_ARTIFACT.path)=/var/workdir/sdists-repo
+      volumeMounts:
+        - mountPath: /etc/pki/tls/certs/ca-custom-bundle.crt
+          name: trusted-ca
+          readOnly: true
+          subPath: ca-bundle.crt
+      computeResources:
+        requests:
+          cpu: '1'
+          memory: 1Gi
+        limits:
+          cpu: '2'
+          memory: 2Gi

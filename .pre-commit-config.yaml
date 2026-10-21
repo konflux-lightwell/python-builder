@@ -1,4 +1,4 @@
-files: ^(src/lightwell_python/|tests/unit/)
+files: ^(src/lightwell_python/|tests/unit/|tests/check_runtime\.py$)
 repos:
   - repo: local
     hooks:

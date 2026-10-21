@@ -1,0 +1,135 @@
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: fromager-build-sdist
+  annotations:
+    tekton.dev/pipelines.minVersion: 1.0.0
+    tekton.dev/tags: python, sdist, fromager, ingestion, lightwell, konflux
+  labels:
+    app.kubernetes.io/version: '0.2'
+    build.appstudio.redhat.com/build_type: python-sdist-ingest
+spec:
+  description: >-
+    Restore the acquired sdist and opaque origin evidence with build-trusted-artifacts. Run lightwell-build-sdist
+    to normalize the source with Fromager, record byte-level transformation evidence, and publish
+    the final OCI sdist image and Chains results.
+
+  params:
+    - name: SDISTS_ARTIFACT
+      description: Trusted Artifact URI containing the downloaded sdist (from fetch-source).
+      type: string
+    - name: PACKAGE
+      description: Canonical Python package name (PEP 503 normalized).
+      type: string
+    - name: VERSION
+      description: Package version string.
+      type: string
+    - name: IMAGE
+      description: Destination reference of the OCI sdist artifact to produce.
+      type: string
+    - name: IMAGE_EXPIRES_AFTER
+      description: Delete image tag after specified time. Empty means keep.
+      type: string
+      default: ''
+    - name: caTrustConfigMapName
+      description: Name of the ConfigMap to read CA bundle data from.
+      type: string
+      default: trusted-ca
+    - name: caTrustConfigMapKey
+      description: Key in ConfigMap for CA bundle.
+      type: string
+      default: ca-bundle.crt
+    - name: git-url
+      description: Immutable source git repository URL for Konflux Snapshot attribution.
+      type: string
+    - name: revision
+      description: Full immutable source commit revision for Konflux Snapshot attribution.
+      type: string
+    - name: PYTHON_BUILDER_IMAGE
+      type: string
+      description: >-
+        Digest-pinned execution image containing lightwell-python and this task's runtime tools.
+        See tekton/tasks/README.md.
+
+  results:
+    - name: IMAGE_DIGEST
+      description: Digest of the sdist OCI artifact.
+    - name: IMAGE_URL
+      description: OCI artifact repository and tag where the sdist was pushed.
+    - name: IMAGE_REF
+      description: Full OCI reference (repo@digest) of the sdist artifact.
+    - name: CHAINS-GIT_URL
+      description: Source git repository URL for Tekton Chains / Snapshot.
+    - name: CHAINS-GIT_COMMIT
+      description: Git commit SHA for Tekton Chains / Snapshot.
+
+  volumes:
+    - name: trusted-ca
+      configMap:
+        items:
+          - key: $(params.caTrustConfigMapKey)
+            path: ca-bundle.crt
+        name: $(params.caTrustConfigMapName)
+        optional: true
+    - name: workdir
+      emptyDir: {}
+
+  stepTemplate:
+    env:
+      - name: HOME
+        value: /tekton/home
+    securityContext:
+      runAsUser: 1001
+    volumeMounts:
+      - name: workdir
+        mountPath: /var/workdir
+    computeResources:
+      limits:
+        cpu: '2'
+        memory: 2Gi
+      requests:
+        cpu: '1'
+        memory: 1Gi
+
+  steps:
+    - name: use-sdists-artifact
+      image: quay.io/konflux-ci/build-trusted-artifacts:latest@sha256:2712c8a6453fc9db5fc4c2d9d952554a4eea46d2fdba47a272b79fa07f8c8c40
+      args:
+        - use
+        - $(params.SDISTS_ARTIFACT)=/var/workdir/sdists-repo
+      volumeMounts:
+        - mountPath: /etc/pki/tls/certs/ca-custom-bundle.crt
+          name: trusted-ca
+          readOnly: true
+          subPath: ca-bundle.crt
+
+    - name: build-sdist
+      image: $(params.PYTHON_BUILDER_IMAGE)
+      workingDir: /var/workdir
+      command:
+        - lightwell-build-sdist
+      args:
+        - --package=$(params.PACKAGE)
+        - --version=$(params.VERSION)
+        - --workdir=/var/workdir
+        - --results-dir=/tekton/results
+        - --ca-bundle=/mnt/trusted-ca/ca-bundle.crt
+        - --sdists-dir=/var/workdir/sdists-repo
+        - --image=$(params.IMAGE)
+        - --image-expires-after=$(params.IMAGE_EXPIRES_AFTER)
+        - --git-url=$(params.git-url)
+        - --revision=$(params.revision)
+        - --auth-file=$(workspaces.registry-auth.path)/.dockerconfigjson
+      volumeMounts:
+        - name: trusted-ca
+          mountPath: /mnt/trusted-ca
+          readOnly: true
+
+  workspaces:
+    - name: registry-auth
+      description: >-
+        Registry push credentials: bind a kubernetes.io/dockerconfigjson Secret containing .dockerconfigjson.
+        Also attach the Secret to the TaskRun service account for trusted-artifact steps.
+      mountPath: /mnt/registry-auth
+      readOnly: true

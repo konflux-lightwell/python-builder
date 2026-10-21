@@ -1,0 +1,187 @@
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: python-fromager-build-wheels
+  annotations:
+    tekton.dev/pipelines.minVersion: 1.0.0
+    tekton.dev/tags: python, wheels, fromager, lightwell, konflux
+  labels:
+    app.kubernetes.io/version: '0.2'
+    build.appstudio.redhat.com/build_type: python-fromager-build
+spec:
+  description: >-
+    Restore the sdist and JSON configuration snapshot with build-trusted-artifacts. Run lightwell-build-wheels
+    to build and verify wheels, enrich SBOMs, and publish the final OCI image. A separate trusted-artifact
+    create step publishes the build manifest.
+
+  params:
+    - name: SDISTS_ARTIFACT
+      description: Trusted Artifact URI containing downloads/<PACKAGE>-<VERSION>.tar.gz.
+      type: string
+    - name: PACKAGE
+      description: Canonical Python package name (PEP 503 normalized).
+      type: string
+    - name: VERSION
+      description: 'Package version string (upstream version). For example: 0.4.0, 2.5.0.'
+      type: string
+    - name: COMPUTED_VERSION
+      description: >-
+        Expected wheel version from source-to-sdist: upstream for Validated, or upstream+rhlw.B[.n.N]
+        for remediated builds.
+      type: string
+    - name: BUILD_TYPE
+      description: >-
+        Build mode: Backport, Novel, or Validated. Validated builds construct the full dependency
+        closure from source (no wheel server), so the allowed-artifacts provenance check applies
+        to remediated builds only.
+      type: string
+    - name: IMAGE
+      description: Reference of the OCI artifact to produce (wheels image).
+      type: string
+    - name: IMAGE_EXPIRES_AFTER
+      description: Delete image tag after specified time. Empty means keep.
+      type: string
+      default: ''
+    - name: ociStorage
+      description: The OCI repository to store the trusted artifact to.
+      type: string
+      default: ''
+    - name: ociArtifactExpiresAfter
+      description: The expiration time for the trusted artifact.
+      type: string
+      default: ''
+    - name: WHEEL_SERVER_URL
+      description: Wheel server URL for prebuilt wheel lookup during fromager dependency resolution.
+      type: string
+      default: https://packages.redhat.com/lightwell/python/validated/simple/
+    - name: PULP_SECRET_NAME
+      description: >-
+        Optional Secret name containing Pulp credentials (basic-auth username/password or SERVICE_ACCOUNT_USERNAME/SERVICE_ACCOUNT_PASSWORD).
+      type: string
+      default: lightwell-pulp-read-secret
+    - name: caTrustConfigMapName
+      description: Name of the ConfigMap to read CA bundle data from.
+      type: string
+      default: trusted-ca
+    - name: caTrustConfigMapKey
+      description: Key in ConfigMap for CA bundle.
+      type: string
+      default: ca-bundle.crt
+    - name: PYTHON_BUILDER_IMAGE
+      type: string
+      description: >-
+        Digest-pinned execution image containing lightwell-python and this task's runtime tools.
+        See tekton/tasks/README.md.
+
+  results:
+    - name: IMAGE_DIGEST
+      description: Digest of the OCI artifact (wheels) just built.
+    - name: IMAGE_URL
+      description: OCI artifact repository and tag where the wheels were pushed.
+    - name: IMAGE_REF
+      description: Full OCI reference (repo@digest) of the built wheels.
+    - name: SBOM_BLOB_URL
+      description: OCI reference for the attached SBOM blob.
+    - name: MANIFEST_ARTIFACT
+      description: >-
+        Trusted Artifact URI containing build-manifest.json staged by lightwell-build-wheels and
+        published by create-manifest-artifact.
+
+  volumes:
+    - name: trusted-ca
+      configMap:
+        items:
+          - key: $(params.caTrustConfigMapKey)
+            path: ca-bundle.crt
+        name: $(params.caTrustConfigMapName)
+        optional: true
+    - name: pulp-secret
+      secret:
+        secretName: $(params.PULP_SECRET_NAME)
+        optional: true
+    - name: workdir
+      emptyDir: {}
+
+  stepTemplate:
+    volumeMounts:
+      - name: workdir
+        mountPath: /var/workdir
+    computeResources:
+      limits:
+        cpu: '4'
+        memory: 4Gi
+      requests:
+        cpu: '4'
+        memory: 4Gi
+
+  steps:
+    - name: use-sdists-artifact
+      image: quay.io/konflux-ci/build-trusted-artifacts:latest@sha256:2712c8a6453fc9db5fc4c2d9d952554a4eea46d2fdba47a272b79fa07f8c8c40
+      args:
+        - use
+        - $(params.SDISTS_ARTIFACT)=/var/workdir/sdists-repo
+      volumeMounts:
+        - mountPath: /etc/pki/tls/certs/ca-custom-bundle.crt
+          name: trusted-ca
+          readOnly: true
+          subPath: ca-bundle.crt
+
+    - name: build-wheels
+      image: $(params.PYTHON_BUILDER_IMAGE)
+      workingDir: /var/workdir
+      command:
+        - lightwell-build-wheels
+      args:
+        - --package=$(params.PACKAGE)
+        - --version=$(params.VERSION)
+        - --workdir=/var/workdir
+        - --results-dir=/tekton/results
+        - --ca-bundle=/mnt/trusted-ca/ca-bundle.crt
+        - --build-type=$(params.BUILD_TYPE)
+        - --computed-version=$(params.COMPUTED_VERSION)
+        - --sdists-dir=/var/workdir/sdists-repo
+        - --manifest-output=/var/workdir/build-manifest.json
+        - --image=$(params.IMAGE)
+        - --image-expires-after=$(params.IMAGE_EXPIRES_AFTER)
+        - --wheel-server-url=$(params.WHEEL_SERVER_URL)
+        - --pulp-secret=/mnt/pulp-secret
+        - --auth-file=$(workspaces.registry-auth.path)/.dockerconfigjson
+      volumeMounts:
+        - name: trusted-ca
+          mountPath: /mnt/trusted-ca
+          readOnly: true
+        - name: pulp-secret
+          mountPath: /mnt/pulp-secret
+          readOnly: true
+
+    - name: create-manifest-artifact
+      image: quay.io/konflux-ci/build-trusted-artifacts:latest@sha256:2712c8a6453fc9db5fc4c2d9d952554a4eea46d2fdba47a272b79fa07f8c8c40
+      env:
+        - name: IMAGE_EXPIRES_AFTER
+          value: $(params.ociArtifactExpiresAfter)
+      args:
+        - create
+        - --store
+        - $(params.ociStorage)
+        - $(results.MANIFEST_ARTIFACT.path)=/var/workdir/build-manifest.json
+      volumeMounts:
+        - mountPath: /etc/pki/tls/certs/ca-custom-bundle.crt
+          name: trusted-ca
+          readOnly: true
+          subPath: ca-bundle.crt
+      computeResources:
+        requests:
+          cpu: 100m
+          memory: 128Mi
+        limits:
+          cpu: '1'
+          memory: 256Mi
+
+  workspaces:
+    - name: registry-auth
+      description: >-
+        Registry push credentials: bind a kubernetes.io/dockerconfigjson Secret containing .dockerconfigjson.
+        Also attach the Secret to the TaskRun service account for trusted-artifact steps.
+      mountPath: /mnt/registry-auth
+      readOnly: true

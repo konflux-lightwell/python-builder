@@ -1,7 +1,8 @@
 # Lightwell Python Builder
 
-This repository contains the Lightwell Python builder image, its native toolchain
-and Fromager overrides, and the `lightwell-python` task package. The package
+This repository contains the Lightwell Python task image and the
+`lightwell-python` task package. The image inherits its native toolchain and
+Fromager environment from a digest-pinned plumbing-builder base. The package
 provides one installed Python command per build or sdist ingestion task.
 Trusted artifact transport stays in separate Tekton steps using
 `quay.io/konflux-ci/build-trusted-artifacts`: `use` before Python and `create`
@@ -11,19 +12,25 @@ after Python when the task produces a trusted artifact.
 
 | Path | Purpose |
 | --- | --- |
-| `Containerfile`, `build_scripts/`, `manylinux-entrypoint` | Existing builder image and native toolchain setup |
-| `requirements.in`, `requirements.txt`, `requirements-build.txt` | Existing builder runtime and build dependency pins |
-| `overrides/` | Fromager settings, patches, and the separate `calunga-package-plugins` package |
+| `Containerfile` | Task image based on the published plumbing-builder image |
+| `build_scripts/`, `manylinux-entrypoint` | Retained native builder sources; not used by the task image build |
+| `requirements.in`, `requirements.txt`, `requirements-build.txt` | Retained native builder dependency pins; the task image inherits its Fromager environment from the base |
+| `overrides/` | Retained Fromager sources; the task image uses the settings, patches, and plugins already in its base |
 | `scripts/` | Existing builder commands used by the current pipelines |
 | `src/lightwell_python/` | Extracted Python task implementations and shared modules |
 | `tests/unit/` | Unit tests for the task package, run by pytest |
+| `tekton/tasks/` | Version 0.2 task definitions invoking the Python CLI with separate trusted-artifact steps |
+| `tests/check_runtime.py`, `docs/image.md` | Task image runtime checks and build instructions |
 | Other files under `tests/` | Existing container/toolchain checks, driven by `tests/run_tests.sh` |
 | `pyproject.toml`, `uv.lock` | Task package metadata, dependencies, and development tools |
 | `docs/migration.md` | Task handoffs and the remaining image/orchestrator integration work |
 
-The task package lives alongside the existing builder components. The current
-Containerfile still installs the commands in `scripts/`; installing the new
-entrypoints into the execution image is part of the next migration stage.
+The task package lives alongside the existing builder components. The
+Containerfile installs the new entrypoints in an isolated environment in the
+default `python-builder` target. See the
+[image build instructions](docs/image.md) and dependency audit.
+The [Tekton tasks](tekton/tasks/README.md) require that image through
+`PYTHON_BUILDER_IMAGE` and document the credential/workspace bindings.
 
 ## Task entrypoints
 
@@ -56,14 +63,16 @@ uv run pytest --cov --cov-report=term-missing
 uv build
 ```
 
-Commit `uv.lock` whenever task package dependencies change. The builder's
-`requirements*.txt` files continue to manage its separate runtime environment.
+Commit `uv.lock` whenever task package dependencies change. The image installs the package
+and its runtime dependencies from the same lock with `uv sync --locked --no-dev
+--no-editable`. Fromager versions are managed by the selected plumbing-builder base.
 CI checks the task package on Python 3.11–3.14, lint,
 formatting, types, coverage (90% minimum), and distribution builds. Tests use temporary files,
 real local Git repositories, and injected adapters; no production credentials or
 registry writes are required.
 
-Ruff is scoped to `src/` and `tests/unit/`, and pytest collects `tests/unit/`.
+Ruff is scoped to `src/`, `tests/unit/`, and the image check at `tests/check_runtime.py`;
+pytest collects `tests/unit/`.
 The existing container/toolchain checks require the built image and its native
 dependencies; they are separate from this package's CI checks.
 
@@ -98,10 +107,10 @@ or run scripts copied from the config repository.
 Build backends and Fromager plugins may themselves require native toolchains.
 
 Production execution needs a container supplying those tools, the existing
-Fromager overrides/plugins and native build dependencies. Use this repository's
-Containerfile and overrides as the builder baseline. This package does
-not install tools at task runtime. A combined, pinned task image and orchestrator
-YAML integration are the next migration stage; they are not provisioned here.
+Fromager overrides/plugins and native build dependencies. This repository's
+Containerfile inherits them from plumbing-builder and adds the task CLI. This package does
+not install tools at task runtime. Build and publish the execution image,
+then supply its digest when integrating the ported tasks with orchestrator.
 
 Optional CA bundles apply through SSL_CERT_FILE, REQUESTS_CA_BUNDLE and
 GIT_SSL_CAINFO. Registry credentials come from `--auth-file`, AUTHFILE, or

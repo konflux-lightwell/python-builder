@@ -15,18 +15,22 @@ been published by this change.
 ## Placement in python-builder
 
 The package is integrated alongside the existing builder tree from
-`konflux-lightwell/python-builder` at `a7fe1e3` on `main`. The upstream
-Containerfile, native build scripts, dependency pins, Fromager overrides,
-legacy commands, and container tests retain their existing paths.
+`konflux-lightwell/python-builder` at `a7fe1e3` on `main`. The upstream native
+build scripts, dependency pins, Fromager overrides, legacy commands, and
+container tests retain their existing paths. The root Containerfile is replaced
+with a small image build using the published plumbing-builder base. It inherits
+that image's native toolchain and Fromager environment; retained local native
+sources and overrides do not participate in this image build.
 `src/lightwell_python/` holds the task package and `tests/unit/` holds its tests.
 Root-level uv, Ruff, pytest, and CI configuration applies to that package.
-Python distributions include the package, unit tests, and package documentation;
-the builder toolchain and its separate plugin are distributed through the image.
+Python source distributions include the package, unit tests, task definitions,
+image checks, and package documentation. The builder toolchain and its separate
+plugins are inherited from the pinned plumbing-builder image.
 
 ## Scope and runtime boundaries
 
 Source preparation and wheel building in `python-build`, plus normalization
-in `python-sdist-ingest`, each have one Python entrypoint.
+in `python-sdist-ingest`, each have one Python entrypoint and a ported Tekton task.
 Build-index generation and attachment have moved to the fath-cuan repository,
 with its own `fath-cuan-attach-build-index` entrypoint and
 `tekton/task/attach-build-index` definition. Shared catalog tasks
@@ -43,13 +47,21 @@ injectable adapters, allowing unit tests to exercise complete task flows without
 network services. There is no generic workflow engine or shell evaluation.
 
 External domain tools remain required: Git, Fromager, auditwheel (native wheels),
-ORAS, and cosign. Tool versions and builder plugins must be pinned in
-the future Python execution image. The trusted-artifact steps keep their existing
+ORAS, and cosign. The Containerfile's `python-builder` target supplies these
+tools for the three ported tasks; see the
+[dependency audit](image.md). The trusted-artifact steps keep their existing
 image and digest pins. The package supports Python >=3.11.4.
 Runtime testing here covers local Git and ORAS; full builds, authenticated registry
 pushes, vulnerability resolution, and cluster execution need staging validation.
 
 ## Trusted artifact handoffs
+
+The version `0.2` definitions in [tekton/tasks](../tekton/tasks/README.md) implement
+these handoffs with direct CLI commands. Each requires `PYTHON_BUILDER_IMAGE`;
+tasks publishing final images or referrers also require a `registry-auth`
+workspace containing `.dockerconfigjson`. The original task names and result
+names remain intact. The wheels task continues to produce `MANIFEST_ARTIFACT`
+for the existing downstream index consumer.
 
 | Task | Existing `use` step restores | Python input/output arguments | Existing `create` step publishes |
 | --- | --- | --- | --- |
@@ -130,11 +142,12 @@ the task succeeds only when its final required step succeeds.
 
 ## Next integration stage
 
-Extend this repository's Containerfile to install this wheel and supply the
-remaining domain tools in a pinned Python execution image. Retain each task's existing trusted-artifact
-`use` and `create` steps, their image pins, credentials, CA mounts, and params.
-Replace only the intervening build-logic steps with the corresponding Python
-entrypoint. `ociStorage`, `ociArtifactExpiresAfter`, SOURCE_ARTIFACT,
+Build and publish the Containerfile's `python-builder` target and use its
+immutable image digest in the corresponding tasks. The ported tasks
+already retain trusted-artifact `use` and `create` steps and replace the
+intervening build logic with CLI commands. Wire the new image parameter and
+registry workspace in consuming pipelines before updating task bundle references.
+`ociStorage`, `ociArtifactExpiresAfter`, SOURCE_ARTIFACT,
 SDISTS_ARTIFACT, and MANIFEST_ARTIFACT remain Tekton transport parameters/results;
 they are not Python CLI arguments.
 
