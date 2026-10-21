@@ -1,0 +1,356 @@
+from pathlib import Path
+
+import pytest
+
+from lightwell_python.runtime import (
+    BuildType,
+    Package,
+    Runner,
+    TaskError,
+    read_json,
+    sha256,
+    write_json,
+)
+from lightwell_python.tasks import index, sdist, source, wheels
+
+from .conftest import FakeRegistry, FakeRunner
+
+
+@pytest.fixture
+def config_repo(tmp_path, package_config):
+    import subprocess
+
+    path = tmp_path / "configs"
+    write_json(path / "packages/demo.json", package_config)
+    for args in (
+        ["init", "-q"],
+        ["config", "user.email", "test@example.test"],
+        ["config", "user.name", "Test"],
+        ["config", "commit.gpgsign", "false"],
+        ["add", "."],
+        ["commit", "-qm", "config"],
+    ):
+        subprocess.run(["git", "-C", str(path), *args], check=True)
+    return path
+
+
+def test_source_end_to_end(tmp_path, git_repo, config_repo):
+    repo, git = git_repo
+    git("commit", "--allow-empty", "-qm", "fix")
+    work = tmp_path / "task"
+    work.mkdir()
+    results = tmp_path / "results"
+    source.run(
+        workdir=work,
+        results=results,
+        package=Package("demo", "1.0"),
+        build_type=BuildType.BACKPORT,
+        source_dir=repo,
+        sdists_output=tmp_path / "sdists-output",
+        config_url=str(config_repo),
+        config_revision="HEAD",
+        runner=Runner(),
+    )
+    assert (results / "COMPUTED_VERSION").read_text() == "1.0+rhlw.1"
+    assert (results / "B_VALUE").read_text() == "1"
+    assert (repo / "source/PKG-INFO").read_text().endswith("Version: 1.0\n")
+    assert read_json(tmp_path / "sdists-output/backend-env.json") == {}
+    assert (tmp_path / "sdists-output/build-configs/.commit").read_text().strip()
+    assert (tmp_path / "sdists-output/downloads/demo-1.0+rhlw.1.tar.gz").is_file()
+    assert not (results / "SDISTS_ARTIFACT").exists()
+
+
+def test_config_clone_credentials_not_in_arguments(tmp_path):
+    secret = tmp_path / "secret"
+    secret.mkdir()
+    (secret / "username").write_text("user")
+    (secret / "password").write_text("top-secret")
+    runner = FakeRunner()
+    source.clone_config(
+        runner, "https://example.test/configs", "main", tmp_path / "checkout", secret
+    )
+    assert "top-secret" not in str([args for args, _ in runner.calls])
+    assert (
+        runner.calls[0][1]["env"]["GIT_CONFIG_KEY_0"]
+        == "http.https://example.test/configs.extraHeader"
+    )
+    with pytest.raises(TaskError, match="HTTPS"):
+        source.clone_config(
+            runner, "http://example.test/configs", "main", tmp_path / "checkout", secret
+        )
+
+
+@pytest.fixture
+def sdist_input(tmp_path):
+    path = tmp_path / "input"
+    (path / "downloads").mkdir(parents=True)
+    (path / "downloads/demo-1.0.tar.gz").write_bytes(b"acquired")
+    (path / "source-origin.json").write_text('{"opaque":true}')
+    (path / "evidence.bin").write_bytes(b"opaque evidence\x00")
+    return path
+
+
+def test_normalize_preserves_evidence_and_binds_digests(tmp_path, sdist_input):
+    work = tmp_path / "task"
+    work.mkdir()
+
+    def normalize(args, kwargs):
+        if args[2] == "build-sdist":
+            built = kwargs["cwd"] / "sdists-repo/builds/demo-1.0.tar.gz"
+            built.parent.mkdir()
+            built.write_bytes(b"normalized")
+
+    registry = FakeRegistry()
+    sdist.run(
+        workdir=work,
+        results=tmp_path / "results",
+        package=Package("Demo", "1.0"),
+        sdists_dir=sdist_input,
+        image="registry.test/demo:tag",
+        git_url="https://git.test/demo",
+        revision="abc",
+        registry=registry,
+        runner=FakeRunner(normalize),
+    )
+    artifact = work / "artifact"
+    assert (artifact / "evidence.bin").read_bytes() == b"opaque evidence\x00"
+    assert (artifact / "downloads/demo-1.0.tar.gz").read_bytes() == b"acquired"
+    transformation = read_json(artifact / "sdist-transformation.json")
+    assert transformation["input"]["sha256"] == sha256(sdist_input / "downloads/demo-1.0.tar.gz")
+    assert transformation["output"]["sha256"] == sha256(artifact / "demo-1.0.tar.gz")
+    assert transformation["source_origin"]["sha256"] == sha256(sdist_input / "source-origin.json")
+    assert (tmp_path / "results/CHAINS-GIT_COMMIT").read_text() == "abc"
+
+
+def test_normalize_rejects_stale_output(tmp_path, sdist_input):
+    (sdist_input / "builds").mkdir()
+    (sdist_input / "builds/demo-1.0.tar.gz").write_bytes(b"stale")
+    work = tmp_path / "task"
+    work.mkdir()
+    registry = FakeRegistry()
+    with pytest.raises(TaskError, match="exactly one"):
+        sdist.run(
+            workdir=work,
+            results=tmp_path / "results",
+            package=Package("demo", "1.0"),
+            sdists_dir=sdist_input,
+            image="registry.test/demo:tag",
+            git_url="url",
+            revision="abc",
+            registry=registry,
+            runner=FakeRunner(),
+        )
+    assert not any(call[0] == "push" for call in registry.calls)
+    assert not (tmp_path / "results").exists()
+    assert not (tmp_path / "manifest-output.json").exists()
+
+
+@pytest.fixture
+def wheel_input(sdist_input, package_config):
+    write_json(sdist_input / "build-configs/packages/demo.json", package_config)
+    write_json(sdist_input / "backend-env.json", {})
+    (sdist_input / ".commit").write_text("abcdef1")
+    return sdist_input
+
+
+def wheel_builder(make_wheel, *, unauthorized=False):
+    def build(args, kwargs):
+        if args[0] == "fromager" and "build-sequence" in args:
+            output = kwargs["cwd"]
+            make_wheel(output / "wheels-repo/downloads")
+            write_json(
+                output / "work-dir/build-sequence-summary.json",
+                [
+                    {
+                        "name": "rogue" if unauthorized else "demo",
+                        "version": "1.0",
+                        "prebuilt": False,
+                    }
+                ],
+            )
+            builds = Path(kwargs["env"]["FROMAGER_SDISTS_REPO"]) / "builds"
+            builds.mkdir()
+            (builds / "demo-1.0.tar.gz").write_bytes(b"built")
+
+    return FakeRunner(build)
+
+
+def test_wheels_complete_task(tmp_path, wheel_input, make_wheel):
+    work = tmp_path / "task"
+    work.mkdir()
+    registry = FakeRegistry()
+    runner = wheel_builder(make_wheel)
+    wheels.run(
+        workdir=work,
+        results=tmp_path / "results",
+        package=Package("demo", "1.0"),
+        computed="1.0+rhlw.1",
+        build_type=BuildType.BACKPORT,
+        sdists_dir=wheel_input,
+        image="localhost:5000/org/repo:latest",
+        manifest_output=tmp_path / "manifest-output.json",
+        registry=registry,
+        runner=runner,
+        image_expires="1d",
+        wheel_server="https://packages.redhat.com/simple",
+    )
+    assert [call[0] for call in registry.calls] == ["push", "sbom"]
+    assert registry.calls[0][5] == ["demo-1.0-rhlw.1", "demo-1.0-rhlw.1-abcdef1"]
+    assert (tmp_path / "results/IMAGE_REF").read_text() == registry.reference
+    assert (work / "artifact/demo-1.0+rhlw.1.tar.gz").is_file()
+    assert not (tmp_path / "results/MANIFEST_ARTIFACT").exists()
+    assert read_json(tmp_path / "manifest-output.json") == read_json(work / "build-manifest.json")
+    assert not (wheel_input / "builds").exists()
+    assert read_json(work / "build-manifest.json")["produced"] == [
+        {"name": "demo", "version": "1.0"}
+    ]
+    assert all(
+        args[0] not in {"bash", "build-wheels", "collect-build-files"} for args, _ in runner.calls
+    )
+
+
+def test_wheels_do_not_publish_unauthorized_build(tmp_path, wheel_input, make_wheel):
+    work = tmp_path / "task"
+    work.mkdir()
+    registry = FakeRegistry()
+    with pytest.raises(TaskError, match="Unauthorized"):
+        wheels.run(
+            workdir=work,
+            results=tmp_path / "results",
+            package=Package("demo", "1.0"),
+            computed="1.0+rhlw.1",
+            build_type=BuildType.BACKPORT,
+            sdists_dir=wheel_input,
+            image="registry.test/repo:latest",
+            manifest_output=tmp_path / "manifest-output.json",
+            registry=registry,
+            runner=wheel_builder(make_wheel, unauthorized=True),
+        )
+    assert not any(call[0] == "push" for call in registry.calls)
+    assert not (tmp_path / "results").exists()
+    assert not (tmp_path / "manifest-output.json").exists()
+
+
+@pytest.mark.parametrize(
+    "build_type,computed,require",
+    [
+        (BuildType.BACKPORT, "1.0+rhlw.2", True),
+        (BuildType.NOVEL, "1.0+rhlw.2.n.1", True),
+        (BuildType.VALIDATED, "1.0", False),
+    ],
+)
+def test_index_complete_task(tmp_path, git_repo, build_type, computed, require):
+    repo, _ = git_repo
+    manifest = tmp_path / "manifest-input"
+    write_json(
+        manifest / "build-manifest.json",
+        {
+            "produced": [{"name": "companion", "version": "2.0"}],
+            "cached": [{"name": "cached", "version": "3.0"}],
+        },
+    )
+    work = tmp_path / "task"
+    work.mkdir()
+    registry = FakeRegistry()
+
+    def generate(args, kwargs):
+        write_json(
+            Path(args[args.index("--output") + 1]),
+            {
+                "primaryPurl": f"pkg:pypi/demo@{computed}",
+                "vulns": ["CVE-2026-12345"] if require else [],
+            },
+        )
+
+    runner = FakeRunner(generate)
+    index.run(
+        workdir=work,
+        results=tmp_path / "results",
+        package=Package("demo", "1.0"),
+        computed=computed,
+        build_type=build_type,
+        source_dir=repo,
+        image_ref=registry.reference,
+        manifest_path=manifest / "build-manifest.json",
+        registry=registry,
+        runner=runner,
+    )
+    args = runner.calls[0][0]
+    assert ("--require-vuln" in args) is require
+    assert "--produced-purl" in args and "--extra-purl" in args
+    assert (tmp_path / "results/BUILD_INDEX_DIGEST").read_text() == "sha256:" + sha256(
+        work / "build-index.json"
+    )
+    assert registry.calls[-1][0] == "attach"
+
+
+def test_index_generation_failure_never_attaches(tmp_path, git_repo):
+    repo, _ = git_repo
+    work = tmp_path / "task"
+    work.mkdir()
+    registry = FakeRegistry()
+
+    def fail(args, kwargs):
+        raise TaskError("No resolvable vulnerabilities")
+
+    with pytest.raises(TaskError):
+        index.run(
+            workdir=work,
+            results=tmp_path / "results",
+            package=Package("demo", "1.0"),
+            computed="1.0+rhlw.1",
+            build_type=BuildType.BACKPORT,
+            source_dir=repo,
+            image_ref=registry.reference,
+            registry=registry,
+            runner=FakeRunner(fail),
+        )
+    assert not any(call[0] == "attach" for call in registry.calls)
+
+
+def test_source_failure_does_not_expose_handoff(tmp_path, git_repo):
+    repo, _ = git_repo
+    work = tmp_path / "scratch"
+    work.mkdir()
+
+    def fail(args, kwargs):
+        raise TaskError("Config clone failed")
+
+    with pytest.raises(TaskError, match="Config clone"):
+        source.run(
+            workdir=work,
+            results=tmp_path / "results",
+            package=Package("demo", "1.0"),
+            build_type=BuildType.VALIDATED,
+            source_dir=repo,
+            sdists_output=tmp_path / "handoff",
+            config_url="https://git.test/config",
+            config_revision="main",
+            runner=FakeRunner(fail),
+        )
+    assert not (tmp_path / "handoff").exists()
+    assert not (tmp_path / "results").exists()
+
+
+def test_failed_sbom_attachment_does_not_stage_manifest(tmp_path, wheel_input, make_wheel):
+    class FailingRegistry(FakeRegistry):
+        def attach_sbom(self, reference, sbom):
+            raise TaskError("SBOM upload failed")
+
+    work = tmp_path / "scratch"
+    work.mkdir()
+    with pytest.raises(TaskError, match="SBOM upload"):
+        wheels.run(
+            workdir=work,
+            results=tmp_path / "results",
+            package=Package("demo", "1.0"),
+            computed="1.0+rhlw.1",
+            build_type=BuildType.BACKPORT,
+            sdists_dir=wheel_input,
+            manifest_output=tmp_path / "manifest.json",
+            image="registry.test/demo:latest",
+            registry=FailingRegistry(),
+            runner=wheel_builder(make_wheel),
+        )
+    assert not (tmp_path / "manifest.json").exists()
+    assert not (tmp_path / "results").exists()

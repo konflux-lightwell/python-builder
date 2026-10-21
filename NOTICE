@@ -1,0 +1,10 @@
+Lightwell Python
+
+Task behavior was adapted from lightwell-konflux-orchestrator and plumbing.
+config_validation.py and its compatibility tests were adapted from
+calunga-python/scripts/validate-build-config.py and
+calunga-python/tests/test_validate_build_config.py.
+
+The imported validator was converted into an importable module, updated to use
+shared duplicate-key-safe JSON loading, and formatted/documented for this package.
+See docs/migration.md for the exact source revisions and intentional changes.

@@ -1,0 +1,78 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "lightwell-python"
+version = "0.1.0"
+description = "Python task implementations for the Lightwell build and ingestion pipelines"
+readme = "README.md"
+requires-python = ">=3.11.4"
+license = "Apache-2.0"
+authors = [{name = "Red Hat Lightwell"}]
+dependencies = ["packaging>=24.2", "PyYAML>=6.0.2"]
+
+[project.urls]
+Repository = "https://github.com/konflux-lightwell/python-builder"
+
+[project.scripts]
+lightwell-source-to-sdist = "lightwell_python.cli:source_to_sdist"
+lightwell-build-wheels = "lightwell_python.cli:build_wheels"
+lightwell-build-sdist = "lightwell_python.cli:build_sdist"
+lightwell-attach-build-index = "lightwell_python.cli:attach_build_index"
+
+[dependency-groups]
+dev = ["pytest>=8.3", "pytest-cov>=6", "ruff>=0.11", "mypy>=1.15", "types-PyYAML>=6"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lightwell_python"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src/lightwell_python",
+    "/tests/unit",
+    "/docs",
+    "/README.md",
+    "/LICENSE",
+    "/NOTICE",
+    "/pyproject.toml",
+    "/uv.lock",
+    "/.python-version",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+# The builder's native scripts and Fromager plugin have separate lifecycles.
+include = ["src/**/*.py", "tests/unit/**/*.py", "pyproject.toml"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "D", "SIM"]
+extend-select = ["D417"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.format]
+docstring-code-format = true
+
+[tool.ruff.lint.per-file-ignores]
+"tests/unit/**" = ["D"]
+
+[tool.mypy]
+python_version = "3.11"
+check_untyped_defs = true
+warn_unused_ignores = true
+no_implicit_optional = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests/unit"]
+addopts = "--import-mode=importlib --strict-markers --strict-config"
+
+[tool.coverage.run]
+branch = true
+source = ["lightwell_python"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 90

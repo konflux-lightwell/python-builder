@@ -1,0 +1,150 @@
+"""Implement the complete Fromager wheel task with verified provenance and SBOMs."""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+from lightwell_python.archives import find_sdist
+from lightwell_python.build import backend_environment, collect_artifacts, run_fromager, sync_sdists
+from lightwell_python.config import BuildConfig
+from lightwell_python.manifest import build_manifest
+from lightwell_python.registry import Registry, repository
+from lightwell_python.runtime import (
+    BuildType,
+    Package,
+    Runner,
+    TaskError,
+    copy_input_tree,
+    read_json,
+    write_json,
+    write_results,
+)
+from lightwell_python.versioning import version_counts
+from lightwell_python.wheel_metadata import extract_sbom, verify_primary_wheels
+
+
+def run(
+    *,
+    workdir: Path,
+    results: Path,
+    package: Package,
+    computed: str,
+    build_type: BuildType,
+    sdists_dir: Path,
+    manifest_output: Path,
+    image: str,
+    registry: Registry,
+    runner: Runner,
+    wheel_server: str = "",
+    pulp_secret: Path | None = None,
+    image_expires: str = "",
+    overrides: Path = Path("/usr/local/share/fromager/overrides"),
+    jobs: int | None = None,
+) -> None:
+    """Build and publish wheels, then stage their manifest for trusted-artifact creation.
+
+    A writable copy of the restored sdist tree supplies the exact config snapshot.
+    Build summaries and primary wheel metadata are verified before publication.
+    The manifest handoff becomes available only after image and SBOM upload succeed.
+
+    Args:
+        workdir: Existing, isolated scratch directory for build outputs.
+        results: Tekton mount receiving IMAGE_URL, IMAGE_DIGEST, IMAGE_REF, and
+            SBOM_BLOB_URL. The create step owns MANIFEST_ARTIFACT.
+        package: Canonical primary distribution and upstream version.
+        computed: Expected full version of the primary wheel.
+        build_type: Version and dependency provenance policy.
+        sdists_dir: Sdist/config tree restored by the preceding use step.
+        manifest_output: New, stable build-manifest.json handoff path for create.
+        image: Destination reference for the final wheels OCI image.
+        registry: Adapter for final-image and SBOM publication.
+        runner: Adapter for Fromager and auditwheel execution.
+        wheel_server: Optional prebuilt-wheel cache URL; forbidden for Validated.
+        pulp_secret: Optional mounted Pulp credentials for the build backend.
+        image_expires: Optional Quay expiration annotation for the final image.
+        overrides: Builder-provided Fromager settings and patch directory.
+        jobs: Optional Fromager parallelism limit.
+
+    Raises:
+        TaskError: Configuration, provenance, metadata, tools, or publication fail.
+            Uploads are not transactional: a failed SBOM attachment may leave the
+            image uploaded, but no manifest handoff or success results are emitted.
+    """
+    if manifest_output.exists():
+        raise TaskError(f"Manifest output already exists: {manifest_output}")
+    version_counts(package, computed, build_type)
+    if build_type == BuildType.VALIDATED and wheel_server:
+        raise TaskError("Validated builds cannot use a prebuilt wheel server")
+
+    sdists = workdir / "sdists-repo"
+    copy_input_tree(sdists_dir, sdists)
+    find_sdist(sdists, package, computed)
+
+    config = BuildConfig.load(sdists / "build-configs/packages" / f"{package.name}.json", package)
+    expected = config.environment(package, computed)
+    environment = read_json(sdists / "backend-env.json")
+    if environment != expected:
+        raise TaskError("Backend environment does not match the build-config snapshot")
+
+    settings = workdir / "fromager-settings"
+    config.render_settings(settings / f"{package.name}.yaml", package, computed)
+    output = workdir / "output"
+    with backend_environment(runner.environment | environment, pulp_secret) as env:
+        run_fromager(
+            runner,
+            output,
+            sdists,
+            settings,
+            package,
+            env,
+            wheel_server,
+            overrides=overrides,
+            jobs=jobs,
+        )
+
+    sync_sdists(sdists / "builds", output / "sdists-repo/builds", package, computed)
+    artifact = workdir / "artifact"
+    collect_artifacts(output, artifact)
+
+    manifest = build_manifest(output, build_type, config.allowed)
+    primary = verify_primary_wheels(artifact, package, computed)
+    manifest_path = workdir / "build-manifest.json"
+    write_json(manifest_path, manifest)
+    sbom = workdir / "sbom.spdx.json"
+    extract_sbom(primary[0], sbom)
+
+    annotations = {
+        "dev.lightwell.package": package.name,
+        "dev.lightwell.version": computed,
+        "dev.lightwell.upstream-version": package.version,
+        "dev.lightwell.pipeline": "python-build",
+        "dev.lightwell.distribution-target": build_type.value.lower(),
+    }
+    if image_expires:
+        annotations["quay.expires-after"] = image_expires
+
+    tag = f"{package.name}-{computed.replace('+', '-')}"
+    tags = [tag] if f"{repository(image)}:{tag}" != image else []
+    commit_path = sdists / ".commit"
+    if commit_path.is_file():
+        commit = commit_path.read_text().strip()
+        if not re.fullmatch(r"[0-9a-f]{7,40}", commit):
+            raise TaskError("Invalid source commit in sdist artifact")
+        tags.append(f"{tag}-{commit}")
+    if any(not re.fullmatch(r"[\w][\w.-]{0,127}", t, flags=re.ASCII) for t in [tag, *tags]):
+        raise TaskError("Computed image tag is not a valid OCI tag")
+
+    reference = registry.push(image, artifact, "application/vnd.python.wheels", annotations, tags)
+    sbom_ref = registry.attach_sbom(reference, sbom)
+
+    write_json(manifest_output, manifest)
+    write_results(
+        results,
+        {
+            "IMAGE_URL": image,
+            "IMAGE_DIGEST": reference.rsplit("@", 1)[1],
+            "IMAGE_REF": reference,
+            "SBOM_BLOB_URL": sbom_ref,
+        },
+    )
