@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, TypedDict
 
 from lightwell_python.registry import Registry
-from lightwell_python.runtime import BuildType, Package, Runner, TaskError
+from lightwell_python.runtime import BuildType, Package, Runner, TaskError, log_stage
 from lightwell_python.tasks import sdist, source, wheels
 
 
@@ -234,7 +234,8 @@ def execute(task: str, argv: list[str] | None = None) -> int:
             package=package,
             runner=runner,
         )
-        args.func(args, context)
+        with log_stage(f"Task {task} for {package.requirement}"):
+            args.func(args, context)
     except (TaskError, OSError, ValueError) as exc:
         logging.getLogger(__name__).error("%s", exc)
         return 1

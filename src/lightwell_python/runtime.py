@@ -11,7 +11,8 @@ import shutil
 import stat
 import subprocess
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Generator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -25,6 +26,33 @@ LOG = logging.getLogger(__name__)
 
 class TaskError(RuntimeError):
     """A task cannot satisfy its input or output contract."""
+
+
+@contextmanager
+def log_stage(description: str) -> Generator[None, None, None]:
+    """Log a stage's start, outcome, and elapsed time without exposing exception data.
+
+    Args:
+        description: Human-readable operation label. Never include credentials,
+            environment values, or unfiltered command arguments.
+
+    Yields:
+        Control to the operation; failures propagate unchanged to the caller.
+    """
+    started = time.monotonic()
+    LOG.info("Starting: %s", description)
+    try:
+        yield
+    except Exception as exc:
+        LOG.error(
+            "Failed: %s after %.1fs (%s)",
+            description,
+            time.monotonic() - started,
+            type(exc).__name__,
+        )
+        raise
+    else:
+        LOG.info("Completed: %s in %.1fs", description, time.monotonic() - started)
 
 
 class BuildType(StrEnum):
@@ -105,7 +133,9 @@ class Runner:
             raise ValueError("attempts must be positive")
         command = [str(arg) for arg in args]
         for attempt in range(attempts):
-            LOG.info("Running %s (attempt %d)", Path(command[0]).name, attempt + 1)
+            executable = Path(command[0]).name
+            started = time.monotonic()
+            LOG.info("Running %s (attempt %d/%d)", executable, attempt + 1, attempts)
             try:
                 result = subprocess.run(
                     command,
@@ -121,9 +151,18 @@ class Runner:
                     f"Unable to execute {Path(command[0]).name}: {type(exc).__name__}"
                 ) from exc
             if result.returncode == 0:
+                LOG.info("%s completed in %.1fs", executable, time.monotonic() - started)
                 return result.stdout or ""
             if attempt + 1 < attempts:
-                time.sleep(min(2**attempt, 10))
+                delay = min(2**attempt, 10)
+                LOG.warning(
+                    "%s exited with status %d after %.1fs; retrying in %ds",
+                    executable,
+                    result.returncode,
+                    time.monotonic() - started,
+                    delay,
+                )
+                time.sleep(delay)
         raise TaskError(f"{Path(command[0]).name} exited with status {result.returncode}")
 
 

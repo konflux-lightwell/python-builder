@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import subprocess
 import tempfile
 from collections.abc import Generator, Mapping
 from contextlib import contextmanager
@@ -86,7 +87,7 @@ class Registry:
 
     Attributes:
         runner: Process adapter used for ORAS and cosign execution.
-        auth_file: Optional explicit Docker auth file, overriding environment defaults.
+        auth_file: Optional Docker auth file overriding select-oci-auth discovery.
     """
 
     runner: Runner
@@ -101,21 +102,41 @@ class Registry:
 
         Yields:
             A mode-0600 config.json in a private temporary directory. The directory is
-            removed on context exit, even if publication fails. Credentials are read from
-            auth_file, AUTHFILE, DOCKER_CONFIG/config.json, or ~/.docker/config.json,
-            in that order of precedence.
+            removed on context exit, even if publication fails. By default,
+            select-oci-auth discovers credentials using the existing Konflux setup.
+            An explicit auth_file bypasses discovery for local runs.
         """
-        env = self.runner.environment
-        docker_directory = Path(env.get("DOCKER_CONFIG", str(Path.home() / ".docker")))
-        default_auth_file = docker_directory / "config.json"
-        configured_auth_file = Path(env.get("AUTHFILE", str(default_auth_file)))
-        original = self.auth_file or configured_auth_file
-        config = read_json(original) if original.is_file() else {}
+        repository(reference)
         with tempfile.TemporaryDirectory(prefix="lightwell-auth-") as directory:
             path = Path(directory) / "config.json"
             path.touch(mode=0o600)
-            write_json(path, select_auth(reference, config))
+            if self.auth_file is None:
+                self._discover_auth(reference, path)
+            try:
+                config = read_json(self.auth_file or path)
+                if not isinstance(config, dict) or not isinstance(config.get("auths", {}), dict):
+                    raise TaskError("Invalid registry authentication configuration")
+                write_json(path, select_auth(reference, config))
+            except (OSError, ValueError, TaskError):
+                raise TaskError("Unable to read registry authentication configuration") from None
             yield path
+
+    def _discover_auth(self, reference: str, path: Path) -> None:
+        """Capture the existing credential helper into a private file without logging it."""
+        try:
+            with path.open("w", encoding="utf-8") as output:
+                subprocess.run(
+                    ["select-oci-auth", reference],
+                    stdout=output,
+                    stderr=subprocess.PIPE,
+                    env=self.runner.environment,
+                    timeout=self.runner.timeout,
+                    check=True,
+                )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise TaskError(
+                f"Unable to select registry credentials: {type(exc).__name__}"
+            ) from None
 
     def push(
         self,

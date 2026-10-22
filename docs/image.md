@@ -23,6 +23,7 @@ The task modules directly invoke these executables:
 | Fromager 0.81.0 | Bootstrap, wheel builds, sdist normalization | Plumbing base, at `/src/venv` |
 | auditwheel and patchelf | Native wheel repair and library inspection | Plumbing base |
 | ORAS | Final OCI pushes and tags | Binary copied from the original task's digest-pinned Konflux ORAS image |
+| select-oci-auth, get-reference-base, and yq | Existing Konflux registry credential selection | Copied from the same pinned Konflux ORAS image |
 | cosign 3.0.2 | SPDX SBOM attachment | Copied from the upstream `cosign-bin` stage |
 
 Native package builds also depend on GCC/G++/GFortran, Rust/Cargo, make, CMake,
@@ -85,8 +86,11 @@ The image runs `tests/check_runtime.py` during its build as UID 1001. It checks 
 three builder entrypoints, required CLI options, writable scratch space, and a
 writable home directory for build-tool caches.
 It also requires `faiss_cpu`, loads all installed Fromager plugins, and probes the compiler, repair, and
-publication tools. All probes are local help/version operations; they do not
-publish anything or contact a registry.
+publication tools. It also exercises `select-oci-auth` with synthetic credentials
+in an isolated subprocess home to check the helper and its runtime dependencies.
+The pinned helper reads `~/.docker/config.json` and invokes `get-reference-base`
+and `yq`. Probes do not publish anything
+or contact a registry.
 
 Re-run them against a built image:
 

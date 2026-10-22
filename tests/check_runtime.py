@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.metadata
+import json
 import os
 import shutil
 import subprocess
@@ -76,12 +77,46 @@ def main() -> None:
     for command, options in common_probes:
         run(command, options)
 
+    check_registry_auth()
     check_builder()
 
     for parent in (Path.cwd(), Path.home()):
         with tempfile.TemporaryDirectory(dir=parent, prefix="builder-smoke-") as directory:
             Path(directory, "write-check").write_text("ok\n")
     print(f"{args.profile} runtime checks passed as UID {os.getuid()}", flush=True)
+
+
+def check_registry_auth() -> None:
+    """Exercise select-oci-auth with synthetic credentials without contacting a registry."""
+    with tempfile.TemporaryDirectory(prefix="builder-auth-smoke-") as directory:
+        auth = Path(directory) / ".docker/config.json"
+        auth.parent.mkdir()
+        auth.write_text(json.dumps({"auths": {"registry.test/team": {"auth": "smoke-only"}}}))
+        # The pinned helper reads ~/.docker/config.json. Isolate the child process
+        # from developer credentials, including versions that support env overrides.
+        environment = dict(os.environ) | {
+            "HOME": directory,
+            "AUTHFILE": str(auth),
+            "DOCKER_CONFIG": str(auth.parent),
+        }
+        try:
+            result = subprocess.run(
+                ["select-oci-auth", "registry.test/team/image:tag"],
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=True,
+            )
+        except subprocess.CalledProcessError as error:
+            # This probe uses only synthetic credentials, so stderr is safe to show.
+            raise RuntimeError(
+                f"select-oci-auth smoke check failed (exit {error.returncode}): {error.stderr}"
+            ) from error
+        expected = {"auths": {"registry.test": {"auth": "smoke-only"}}}
+        if json.loads(result.stdout) != expected:
+            raise RuntimeError("select-oci-auth did not select the repository credential")
+    print("OK: select-oci-auth credential selection", flush=True)
 
 
 def check_builder() -> None:

@@ -120,16 +120,7 @@ spec:
         - --image-expires-after=$(params.IMAGE_EXPIRES_AFTER)
         - --git-url=$(params.git-url)
         - --revision=$(params.revision)
-        - --auth-file=$(workspaces.registry-auth.path)/.dockerconfigjson
       volumeMounts:
         - name: trusted-ca
           mountPath: /mnt/trusted-ca
           readOnly: true
-
-  workspaces:
-    - name: registry-auth
-      description: >-
-        Registry push credentials: bind a kubernetes.io/dockerconfigjson Secret containing .dockerconfigjson.
-        Also attach the Secret to the TaskRun service account for trusted-artifact steps.
-      mountPath: /mnt/registry-auth
-      readOnly: true

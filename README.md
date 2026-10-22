@@ -113,8 +113,9 @@ not install tools at task runtime. Build and publish the execution image,
 then supply its digest when integrating the ported tasks with orchestrator.
 
 Optional CA bundles apply through SSL_CERT_FILE, REQUESTS_CA_BUNDLE and
-GIT_SSL_CAINFO. Registry credentials come from `--auth-file`, AUTHFILE, or
-DOCKER_CONFIG/config.json (default ~/.docker/config.json). Repository-specific
+GIT_SSL_CAINFO. Registry credentials use the existing `select-oci-auth` helper,
+or an explicit `--auth-file` for local runs. The pinned helper reads
+`~/.docker/config.json`. Repository-specific
 credentials take precedence over registry-wide credentials. `--git-auth` accepts
 a mounted directory containing username/password for the HTTPS config clone;
 `--pulp-secret` accepts either username/password or SERVICE_ACCOUNT_* files.
@@ -129,6 +130,11 @@ does. Failed tasks exit nonzero; successful result files are emitted only after
 all required Python operations finish. Tekton must then run the trusted-artifact
 `create` step successfully for the entire task to succeed. Registry pushes are not transactional: a later
 attachment failure may leave an image uploaded, but does not report success.
+
+INFO logs report task and stage start/completion times, computed versions, resolved
+config commits, per-wheel progress, publication digests, and final output paths.
+Failures identify the active stage. These logs are enabled by default; `--verbose`
+is not required. Environment values and full command arguments are omitted.
 
 See [migration notes](docs/migration.md) for compatibility boundaries and deliberate
 behavior corrections.

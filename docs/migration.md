@@ -58,8 +58,8 @@ pushes, vulnerability resolution, and cluster execution need staging validation.
 
 The version `0.2` definitions in [tekton/tasks](../tekton/tasks/README.md) implement
 these handoffs with direct CLI commands. Each requires `PYTHON_BUILDER_IMAGE`;
-tasks publishing final images or referrers also require a `registry-auth`
-workspace containing `.dockerconfigjson`. The original task names and result
+registry publication uses the existing `select-oci-auth` mechanism without an
+additional workspace or Secret. The original task names and result
 names remain intact. The wheels task continues to produce `MANIFEST_ARTIFACT`
 for the existing downstream index consumer.
 
@@ -130,6 +130,9 @@ the task succeeds only when its final required step succeeds.
   the primary SPDX document is mandatory before any publication.
 - Wheel RECORD is regenerated as CSV with hashes for every member, including
   renamed/enriched SBOMs. Signed wheels and duplicate members are rejected.
+  Metadata selection and SBOM rewriting use only the root `.dist-info` directory;
+  vendored dependencies' RECORD, METADATA, signatures, and SBOMs remain unchanged
+  and are hashed as ordinary payload files in the root RECORD.
 - Registry parsing preserves ports. Results hash the manifest ORAS exported at
   push time, avoiding mutable-tag races. Result files are written after required
   publication/attachment steps succeed.
@@ -137,16 +140,18 @@ the task succeeds only when its final required step succeeds.
   subprocess has a configurable timeout and executes an argument vector.
 - Trusted artifact transport and verification stay with the existing
   `build-trusted-artifacts` image. Python copies restored inputs into writable
-  scratch space when mutation is needed. Final-image credentials use private
-  temporary files, with no global Git config or HOME changes.
+  scratch space when mutation is needed. Final-image credentials retain the
+  existing `select-oci-auth` discovery and use private temporary files, with no
+  global Git config or HOME changes. `--auth-file` remains a local override.
 
 ## Next integration stage
 
 Build and publish the Containerfile's `python-builder` target and use its
 immutable image digest in the corresponding tasks. The ported tasks
 already retain trusted-artifact `use` and `create` steps and replace the
-intervening build logic with CLI commands. Wire the new image parameter and
-registry workspace in consuming pipelines before updating task bundle references.
+intervening build logic with CLI commands. Wire the new image parameter in
+consuming pipelines before updating task bundle references; retain the existing
+service-account registry credentials.
 `ociStorage`, `ociArtifactExpiresAfter`, SOURCE_ARTIFACT,
 SDISTS_ARTIFACT, and MANIFEST_ARTIFACT remain Tekton transport parameters/results;
 they are not Python CLI arguments.

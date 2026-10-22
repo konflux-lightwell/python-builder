@@ -23,6 +23,9 @@ RUN /src/venv/bin/uv sync --locked --no-dev --no-editable --python /src/venv/bin
 FROM ${BUILDER_IMAGE} AS python-builder
 USER 0
 COPY --from=oras-bin /usr/bin/oras /usr/local/bin/oras
+COPY --from=oras-bin /usr/local/bin/select-oci-auth /usr/local/bin/select-oci-auth
+COPY --from=oras-bin /usr/local/bin/get-reference-base /usr/local/bin/get-reference-base
+COPY --from=oras-bin /usr/bin/yq /usr/bin/yq
 # Publication clients are installed here; the base supplies the build toolchain.
 COPY --from=cosign-bin /ko-app/cosign /usr/local/bin/cosign
 # Both stages share the base interpreter and the environment's absolute path.

@@ -121,12 +121,30 @@ def _root_package_id(sbom: dict) -> str | None:
     return None
 
 
+def _dist_info_directory(archive: zipfile.ZipFile) -> str:
+    """Find the wheel's unique root metadata directory, excluding vendored metadata."""
+    directories = sorted(
+        {
+            name.split("/", 1)[0]
+            for name in archive.namelist()
+            if "/" in name and name.split("/", 1)[0].endswith(".dist-info")
+        }
+    )
+    if len(directories) != 1:
+        raise TaskError(
+            f"Wheel {archive.filename} must contain exactly one top-level .dist-info directory; "
+            f"found {len(directories)}: {directories}"
+        )
+    return directories[0]
+
+
 def patch_wheel(path: Path, libraries: dict[str, list[str]] | None = None) -> None:
     """Update embedded SBOMs and regenerate the wheel's CSV RECORD.
 
     Fromager SBOMs become redhat.spdx.json; auditwheel CDX documents are removed.
     Members are processed one at a time. A temporary sibling wheel replaces the
-    original only after the rewrite completes successfully.
+    original only after the rewrite completes successfully. Metadata nested inside
+    vendored dependencies is preserved; only the root distribution is rewritten.
 
     Args:
         path: Wheel file to modify in place.
@@ -146,21 +164,22 @@ def patch_wheel(path: Path, libraries: dict[str, list[str]] | None = None) -> No
             names = source.namelist()
             if len(set(names)) != len(names):
                 raise TaskError("Wheel contains duplicate members")
-            records = [n for n in names if n.endswith(".dist-info/RECORD")]
-            if len(records) != 1:
-                raise TaskError("Wheel must contain exactly one RECORD")
-            if any(n.endswith((".dist-info/RECORD.jws", ".dist-info/RECORD.p7s")) for n in names):
+            dist_info = _dist_info_directory(source)
+            record_name = f"{dist_info}/RECORD"
+            if record_name not in names:
+                raise TaskError(f"Wheel {path.name} is missing its top-level RECORD: {record_name}")
+            if any(f"{record_name}{suffix}" in names for suffix in (".jws", ".p7s")):
                 raise TaskError("Cannot modify an already signed wheel")
             rows = []
             written: set[str] = set()
             for info in source.infolist():
                 name = info.filename
-                if name == records[0] or (
-                    ".dist-info/sboms/" in name and name.endswith(".cdx.json")
+                if name == record_name or (
+                    name.startswith(f"{dist_info}/sboms/") and name.endswith(".cdx.json")
                 ):
                     continue
                 data = source.read(name)
-                if name.endswith(".dist-info/sboms/fromager.spdx.json"):
+                if name == f"{dist_info}/sboms/fromager.spdx.json":
                     data = json.dumps(
                         patch_sbom(json.loads(data), path.name, libraries or {}), indent=2
                     ).encode()
@@ -174,10 +193,10 @@ def patch_wheel(path: Path, libraries: dict[str, list[str]] | None = None) -> No
                     base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=").decode()
                 )
                 rows.append((name, f"sha256={digest}", str(len(data))))
-            rows.append((records[0], "", ""))
+            rows.append((record_name, "", ""))
             record = io.StringIO(newline="")
             csv.writer(record, lineterminator="\n").writerows(rows)
-            output.writestr(records[0], record.getvalue())
+            output.writestr(record_name, record.getvalue())
         target.replace(path)
 
 
@@ -204,17 +223,18 @@ def verify_primary_wheels(artifact: Path, package: Package, computed: str) -> li
         if version != Version(computed):
             raise TaskError(f"Primary wheel filename version mismatch: {path.name}")
         with zipfile.ZipFile(path) as wheel:
-            metadata = [n for n in wheel.namelist() if n.endswith(".dist-info/METADATA")]
-            sboms = [n for n in wheel.namelist() if n.endswith(".dist-info/sboms/redhat.spdx.json")]
-            if len(metadata) != 1 or len(sboms) != 1:
+            dist_info = _dist_info_directory(wheel)
+            metadata = f"{dist_info}/METADATA"
+            sbom_name = f"{dist_info}/sboms/redhat.spdx.json"
+            if wheel.namelist().count(metadata) != 1 or wheel.namelist().count(sbom_name) != 1:
                 raise TaskError("Primary wheel must contain one METADATA and one redhat.spdx.json")
-            headers = BytesParser().parsebytes(wheel.read(metadata[0]))
+            headers = BytesParser().parsebytes(wheel.read(metadata))
             if (
                 headers.get("Version") != computed
                 or canonicalize_name(headers.get("Name", "")) != package.name
             ):
                 raise TaskError("Primary wheel METADATA identity/version mismatch")
-            sbom = json.loads(wheel.read(sboms[0]))
+            sbom = json.loads(wheel.read(sbom_name))
             primary = [p for p in sbom.get("packages", []) if p.get("SPDXID") == "SPDXRef-wheel"]
             if len(primary) != 1 or primary[0].get("versionInfo") != computed:
                 raise TaskError("Primary wheel SBOM version mismatch")
@@ -235,7 +255,8 @@ def extract_sbom(wheel: Path, target: Path) -> None:
         TaskError: The wheel does not contain exactly one primary SPDX document.
     """
     with zipfile.ZipFile(wheel) as archive:
-        members = [n for n in archive.namelist() if n.endswith(".dist-info/sboms/redhat.spdx.json")]
-        if len(members) != 1:
+        dist_info = _dist_info_directory(archive)
+        member = f"{dist_info}/sboms/redhat.spdx.json"
+        if archive.namelist().count(member) != 1:
             raise TaskError("Expected exactly one primary SBOM")
-        target.write_bytes(archive.read(members[0]))
+        target.write_bytes(archive.read(member))

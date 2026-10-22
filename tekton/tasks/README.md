@@ -53,27 +53,12 @@ digest as `PYTHON_BUILDER_IMAGE`.
 `source-to-sdist` retains the required `git-auth` workspace with `username` and
 `password` files for the build-config clone.
 
-The wheels and sdist tasks require a read-only `registry-auth`
-workspace. Bind a `kubernetes.io/dockerconfigjson` Secret containing
-`.dockerconfigjson`; its credentials must allow pushes to the final image
-repository. The CLI receives that mounted file through `--auth-file`, selects
-the most specific repository credential, and creates temporary private auth
-files for ORAS/cosign.
-
-For example, add this binding to the consuming TaskRun:
-
-```yaml
-workspaces:
-  - name: registry-auth
-    secret:
-      secretName: my-image-push-secret
-```
-
-In a PipelineTask, map
-`registry-auth` to a Pipeline workspace and bind that workspace to the Secret
-in the PipelineRun. Also keep the required OCI credentials attached to the
-TaskRun service account: the trusted-artifact images retain their own credential
-discovery. A registry workspace does not replace that service-account setup.
+The wheels and sdist tasks use `select-oci-auth`, as the original tasks did,
+to select registry credentials from the existing Konflux service-account setup.
+Python captures the helper output in a private temporary file for ORAS/cosign
+and removes it after publication. No additional registry Secret or workspace
+binding is required. Local CLI runs can override discovery with `--auth-file`.
+Keep the existing service-account credentials available to trusted-artifact steps.
 
 The wheels task retains the optional Pulp Secret mount and its
 `PULP_SECRET_NAME` parameter. Set `WHEEL_SERVER_URL` to an empty string for

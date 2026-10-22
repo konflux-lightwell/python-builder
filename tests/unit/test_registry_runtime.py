@@ -1,3 +1,4 @@
+import os
 import shutil
 import subprocess
 import sys
@@ -84,7 +85,9 @@ def test_attach_sbom_digest(tmp_path):
     payload = tmp_path / "sbom.spdx.json"
     payload.write_text("{}")
     runner = FakeRunner()
-    registry = Registry(runner)
+    auth = tmp_path / "auth.json"
+    write_json(auth, {"auths": {}})
+    registry = Registry(runner, auth)
     ref = "registry.test/repo@sha256:" + "a" * 64
     result = registry.attach_sbom(ref, payload)
     assert result == "registry.test/repo@sha256:" + sha256(payload)
@@ -100,7 +103,8 @@ def test_runner_never_evaluates_shell_syntax(tmp_path):
     assert not (tmp_path / "should-not-exist").exists()
 
 
-def test_runner_retry_and_no_sensitive_error(monkeypatch):
+def test_runner_retry_and_no_sensitive_error(monkeypatch, caplog):
+    caplog.set_level("INFO")
     calls = []
 
     def run(args, **kwargs):
@@ -115,6 +119,10 @@ def test_runner_retry_and_no_sensitive_error(monkeypatch):
     with pytest.raises(TaskError, match="status 7") as error:
         Runner().run(["tool", "top-secret"])
     assert "top-secret" not in str(error.value)
+    assert "Running tool (attempt 2/2)" in caplog.text
+    assert "retrying in 1s" in caplog.text
+    assert "tool completed in" in caplog.text
+    assert "secret" not in caplog.text
 
 
 @pytest.mark.parametrize("exception", [FileNotFoundError(), subprocess.TimeoutExpired("tool", 1)])
@@ -146,7 +154,9 @@ def test_real_oras_final_image_manifest(tmp_path):
         def run(self, args, **kwargs):
             return super().run([*args, "--oci-layout"], **kwargs)
 
-    registry = Registry(LayoutRunner())
+    auth = tmp_path / "auth.json"
+    write_json(auth, {"auths": {}})
+    registry = Registry(LayoutRunner(), auth)
     source = tmp_path / "wheels"
     source.mkdir()
     (source / "demo.whl").write_bytes(b"wheel payload")
@@ -154,6 +164,79 @@ def test_real_oras_final_image_manifest(tmp_path):
     reference = registry.push(str(layout) + ":wheels", source, "application/vnd.python.wheels", {})
     digest = read_json(layout / "index.json")["manifests"][0]["digest"]
     assert reference == f"{layout}@{digest}"
+
+
+def test_registry_discovers_credentials_with_existing_helper(tmp_path):
+    executable = tmp_path / "select-oci-auth"
+    record = tmp_path / "helper-call.json"
+    executable.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, sys\n"
+        "from pathlib import Path\n"
+        "Path(os.environ['AUTH_RECORD']).write_text(json.dumps(sys.argv[1:]))\n"
+        "print(Path(os.environ['AUTHFILE']).read_text())\n"
+    )
+    executable.chmod(0o755)
+    original = tmp_path / "existing-auth.json"
+    config = {"auths": {"registry.test/team": {"auth": "test-credential"}}}
+    write_json(original, config)
+    runner = Runner(
+        environment=dict(os.environ)
+        | {
+            "PATH": str(tmp_path) + os.pathsep + os.environ["PATH"],
+            "AUTHFILE": str(original),
+            "AUTH_RECORD": str(record),
+        }
+    )
+    registry = Registry(runner)
+    with registry.auth("registry.test/team/image:tag") as auth:
+        assert auth.stat().st_mode & 0o777 == 0o600
+        assert auth.parent.stat().st_mode & 0o777 == 0o700
+        assert read_json(auth) == {"auths": {"registry.test": {"auth": "test-credential"}}}
+    assert read_json(record) == ["registry.test/team/image:tag"]
+    assert read_json(original) == config
+    assert not auth.exists()
+
+
+@pytest.mark.parametrize("failure", ["exit", "timeout", "missing", "malformed", "invalid-shape"])
+def test_registry_discovery_failure_is_private_and_cleans_up(
+    tmp_path, monkeypatch, capsys, failure
+):
+    paths = []
+
+    def helper(command, **kwargs):
+        assert command == ["select-oci-auth", "registry.test/team/image:tag"]
+        assert kwargs["stderr"] == subprocess.PIPE
+        assert kwargs["timeout"] == 17
+        output = kwargs["stdout"]
+        paths.append(Path(output.name))
+        output.write("[]" if failure == "invalid-shape" else "private-token")
+        if failure == "exit":
+            raise subprocess.CalledProcessError(1, command, stderr=b"private-token")
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(command, 17, stderr=b"private-token")
+        if failure == "missing":
+            raise FileNotFoundError("private-token")
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(subprocess, "run", helper)
+    with (
+        pytest.raises(TaskError) as error,
+        Registry(Runner(timeout=17)).auth("registry.test/team/image:tag"),
+    ):
+        pytest.fail("Invalid discovery must not reach publication")
+    assert "private-token" not in str(error.value)
+    assert "private-token" not in repr(capsys.readouterr())
+    assert paths and all(not path.parent.exists() for path in paths)
+
+
+def test_missing_explicit_auth_file_does_not_fall_back_to_discovery(tmp_path, monkeypatch):
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: pytest.fail("Unexpected discovery"))
+    with (
+        pytest.raises(TaskError, match="authentication configuration"),
+        Registry(Runner(), tmp_path / "missing").auth("registry.test/team/image"),
+    ):
+        pytest.fail("Missing explicit credentials must fail")
 
 
 def test_restored_input_copy_is_writable_and_preserves_source(tmp_path):

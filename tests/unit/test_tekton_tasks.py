@@ -134,7 +134,8 @@ def test_task_arguments_dispatch_to_the_python_entrypoint(task, build_type, tmp_
     assert call["workdir"].parent == tmp_path / "workdir"
     assert not any("ARTIFACT" in arg or "registry.test/trusted-artifacts" in arg for arg in args)
     if cli_name != "source-to-sdist":
-        assert call["registry"].auth_file == Path("/mnt/registry-auth/.dockerconfigjson")
+        assert call["registry"].auth_file is None
+        assert "workspaces" not in task["spec"]
 
 
 def test_trusted_artifact_paths_and_ownership(task):

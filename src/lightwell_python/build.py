@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import shutil
 import tempfile
@@ -14,8 +15,10 @@ from pathlib import Path
 from packaging.utils import parse_sdist_filename, parse_wheel_filename
 from packaging.version import Version
 
-from lightwell_python.runtime import Package, Runner, TaskError, sha256
+from lightwell_python.runtime import Package, Runner, TaskError, log_stage, sha256
 from lightwell_python.wheel_metadata import patch_wheel, system_libraries
+
+LOG = logging.getLogger(__name__)
 
 
 @contextmanager
@@ -106,15 +109,18 @@ def run_fromager(
         common += ["--jobs", str(jobs)]
     cache = ["--cache-wheel-server-url", wheel_server] if wheel_server else []
     env = environment | {"FROMAGER_SDISTS_REPO": str(sdists), "SOURCE_DATE_EPOCH": "0"}
-    runner.run([*common, "bootstrap", package.requirement, *cache], cwd=output, env=env)
-    runner.run(
-        [*common, "build-sequence", "work-dir/build-order.json", *cache], cwd=output, env=env
-    )
+    with log_stage("Fromager bootstrap and dependency resolution"):
+        runner.run([*common, "bootstrap", package.requirement, *cache], cwd=output, env=env)
+    with log_stage("Fromager build sequence"):
+        runner.run(
+            [*common, "build-sequence", "work-dir/build-order.json", *cache], cwd=output, env=env
+        )
     summary = output / "work-dir/build-sequence-summary.json"
     if not summary.is_file():
         raise TaskError("Fromager did not produce a build sequence summary")
     shutil.copyfile(summary, output / f"build-sequence-summary-{package.name}.json")
-    repair_wheels(runner, output / "wheels-repo/downloads", env)
+    with log_stage("Repair native wheels and update embedded SBOMs"):
+        repair_wheels(runner, output / "wheels-repo/downloads", env)
 
 
 def repair_wheels(runner: Runner, wheels: Path, environment: dict[str, str]) -> None:
@@ -130,6 +136,7 @@ def repair_wheels(runner: Runner, wheels: Path, environment: dict[str, str]) -> 
             metadata cannot be rewritten safely.
     """
     native = sorted(wheels.glob("*linux_x86_64.whl"))
+    LOG.info("Native wheels requiring repair: %d", len(native))
     if native:
         with tempfile.TemporaryDirectory(prefix="lightwell-libs-") as directory:
             libraries = Path(directory)
@@ -142,9 +149,10 @@ def repair_wheels(runner: Runner, wheels: Path, environment: dict[str, str]) -> 
                 "LD_LIBRARY_PATH": directory + (":" + inherited if inherited else "")
             }
             runner.run(["auditwheel", "repair", *native, "-w", wheels], env=env)
-    for wheel in sorted(wheels.glob("*.whl")):
-        if not publishable(wheel):
-            continue
+    publishable_wheels = [wheel for wheel in sorted(wheels.glob("*.whl")) if publishable(wheel)]
+    LOG.info("Wheels to process for publication: %d", len(publishable_wheels))
+    for index, wheel in enumerate(publishable_wheels, start=1):
+        LOG.info("Processing wheel %d/%d: %s", index, len(publishable_wheels), wheel.name)
         libraries_by_name = {}
         if "manylinux" in wheel.name:
             report = runner.run(["auditwheel", "show", wheel], env=environment, capture=True)

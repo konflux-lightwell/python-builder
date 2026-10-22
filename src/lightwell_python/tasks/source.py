@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import logging
 import shutil
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -15,10 +16,13 @@ from lightwell_python.runtime import (
     Runner,
     TaskError,
     copy_input_tree,
+    log_stage,
     write_json,
     write_results,
 )
 from lightwell_python.versioning import compute_version, rewrite_metadata
+
+LOG = logging.getLogger(__name__)
 
 
 def clone_config(
@@ -102,39 +106,49 @@ def run(
     if sdists_output.exists():
         raise TaskError(f"Sdist output already exists: {sdists_output}")
 
+    LOG.info("Preparing source for %s; build type: %s", package.requirement, build_type.value)
     repo = workdir / "source"
-    copy_input_tree(source_dir, repo)
-    version = compute_version(repo, package, build_type, runner)
+    with log_stage("Copy restored source into scratch space"):
+        copy_input_tree(source_dir, repo)
+        LOG.info("Source copy: %s", repo)
+
+    with log_stage("Resolve build version"):
+        version = compute_version(repo, package, build_type, runner)
+        LOG.info("Computed version: %s (B=%d, N=%d)", version.full, version.b, version.n)
 
     config_repo = workdir / "build-configs"
-    commit = clone_config(runner, config_url, config_revision, config_repo, git_auth)
-    config_path = config_repo / "packages" / f"{package.name}.json"
-    config = BuildConfig.load(config_path, package)
+    with log_stage("Clone and validate build configuration"):
+        commit = clone_config(runner, config_url, config_revision, config_repo, git_auth)
+        config_path = config_repo / "packages" / f"{package.name}.json"
+        config = BuildConfig.load(config_path, package)
+        LOG.info("Build configuration: %s; resolved commit: %s", config_path, commit)
 
     staging = workdir / "sdists-repo"
-    snapshot = staging / "build-configs/packages"
-    snapshot.mkdir(parents=True)
-    shutil.copyfile(config_path, snapshot / config_path.name)
-    (snapshot.parent / ".commit").write_text(commit + "\n")
-    write_json(staging / "backend-env.json", config.environment(package, version.full))
-    write_json(
-        staging / "version-overrides.json",
-        {"env": config.env, "version_rewrite": {"files": config.rewrites}},
-    )
+    with log_stage("Stage configuration snapshot and backend environment"):
+        snapshot = staging / "build-configs/packages"
+        snapshot.mkdir(parents=True)
+        shutil.copyfile(config_path, snapshot / config_path.name)
+        (snapshot.parent / ".commit").write_text(commit + "\n")
+        write_json(staging / "backend-env.json", config.environment(package, version.full))
+        write_json(
+            staging / "version-overrides.json",
+            {"env": config.env, "version_rewrite": {"files": config.rewrites}},
+        )
 
-    rewrite_metadata(repo / "source", package, version.full, config.rewrites)
-    create_sdist(repo / "source", staging, package, version.full)
-    if version.commit:
-        (staging / ".commit").write_text(version.commit)
+    with log_stage("Rewrite source version metadata"):
+        rewrite_metadata(repo / "source", package, version.full, config.rewrites)
 
-    sdists_output.parent.mkdir(parents=True, exist_ok=True)
-    shutil.move(str(staging), sdists_output)
+    with log_stage("Create deterministic sdist and cache aliases"):
+        archive = create_sdist(repo / "source", staging, package, version.full)
+        LOG.info("Created sdist: %s (%d bytes)", archive.name, archive.stat().st_size)
+        if version.commit:
+            (staging / ".commit").write_text(version.commit)
 
-    write_results(
-        results,
-        {
-            "COMPUTED_VERSION": version.full,
-            "B_VALUE": version.b,
-            "N_VALUE": version.n,
-        },
-    )
+    with log_stage("Finalize sdist handoff and task results"):
+        sdists_output.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(staging), sdists_output)
+        write_results(
+            results,
+            {"COMPUTED_VERSION": version.full, "B_VALUE": version.b, "N_VALUE": version.n},
+        )
+    LOG.info("Sdist handoff ready: %s; task results: %s", sdists_output, results)

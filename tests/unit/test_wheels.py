@@ -17,6 +17,7 @@ from lightwell_python.build import (
 from lightwell_python.manifest import build_manifest
 from lightwell_python.runtime import BuildType, Package, TaskError, write_json
 from lightwell_python.wheel_metadata import (
+    extract_sbom,
     patch_sbom,
     patch_wheel,
     system_libraries,
@@ -52,6 +53,61 @@ def test_wheel_record_matches_every_member(tmp_path, make_wheel):
         )
         assert any(p["name"] == "libc.so.6" for p in sbom["packages"])
         assert "file_name=" in sbom["packages"][0]["externalRefs"][0]["referenceLocator"]
+
+
+@pytest.mark.parametrize("version", ["1.0", "1.0+rhlw.1"])
+def test_vendored_metadata_is_preserved_and_hashed(tmp_path, make_wheel, version):
+    wheel = make_wheel(tmp_path, version=version)
+    nested = "demo/_vendor/dependency-2.0.dist-info"
+    vendored = {
+        f"{nested}/RECORD": b"original vendored record\n",
+        f"{nested}/RECORD.jws": b"vendored signature",
+        f"{nested}/METADATA": b"Name: dependency\nVersion: 2.0\n",
+        f"{nested}/sboms/fromager.spdx.json": b'{"packages": []}',
+        f"{nested}/sboms/redhat.spdx.json": b'{"packages": []}',
+        f"{nested}/sboms/auditwheel.cdx.json": b"{}",
+    }
+    with zipfile.ZipFile(wheel, "a") as archive:
+        for name, data in vendored.items():
+            archive.writestr(name, data)
+
+    patch_wheel(wheel)
+    assert verify_primary_wheels(tmp_path, Package("demo", "1.0"), version) == [wheel]
+    sbom_path = tmp_path / "primary.spdx.json"
+    extract_sbom(wheel, sbom_path)
+    assert json.loads(sbom_path.read_bytes())["packages"][0]["versionInfo"] == version
+
+    with zipfile.ZipFile(wheel) as archive:
+        record_name = f"demo-{version}.dist-info/RECORD"
+        rows = list(csv.reader(io.StringIO(archive.read(record_name).decode())))
+        assert {row[0] for row in rows} == set(archive.namelist())
+        for name, data in vendored.items():
+            assert archive.read(name) == data
+        for name, digest, size in rows:
+            if name == record_name:
+                assert digest == size == ""
+            else:
+                data = archive.read(name)
+                expected = base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=")
+                assert digest == f"sha256={expected.decode()}"
+                assert int(size) == len(data)
+
+
+@pytest.mark.parametrize("extra", [False, True])
+def test_missing_or_ambiguous_root_metadata_fails_without_modifying_wheel(tmp_path, extra):
+    wheel = tmp_path / "demo-1.0-py3-none-any.whl"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        archive.writestr("demo-1.0.dist-info/METADATA", "Name: demo\nVersion: 1.0\n")
+        archive.writestr("demo/_vendor/dep-2.0.dist-info/RECORD", "")
+        if extra:
+            archive.writestr("demo-1.0.dist-info/RECORD", "")
+            archive.writestr("other-2.0.dist-info/METADATA", "Name: other\n")
+    before = wheel.read_bytes()
+    message = "one top-level .dist-info" if extra else "missing its top-level RECORD"
+    with pytest.raises(TaskError, match=message) as error:
+        patch_wheel(wheel)
+    assert wheel.name in str(error.value)
+    assert wheel.read_bytes() == before
 
 
 @pytest.mark.parametrize(

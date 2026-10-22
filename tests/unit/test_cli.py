@@ -57,7 +57,8 @@ from lightwell_python.runtime import TaskError
         ),
     ],
 )
-def test_cli_dispatches_all_task_inputs(tmp_path, monkeypatch, task, module, extra):
+def test_cli_dispatches_all_task_inputs(tmp_path, monkeypatch, task, module, extra, caplog):
+    caplog.set_level("INFO")
     calls = []
     monkeypatch.setattr(getattr(cli, module), "run", lambda **kwargs: calls.append(kwargs))
     ca = tmp_path / "ca.pem"
@@ -82,9 +83,12 @@ def test_cli_dispatches_all_task_inputs(tmp_path, monkeypatch, task, module, ext
     assert calls[0]["results"] == tmp_path / "results"
     assert cli.execute(task, args) == 0
     assert calls[0]["workdir"] != calls[1]["workdir"]
+    assert f"Starting: Task {task} for demo==1.0" in caplog.text
+    assert f"Completed: Task {task} for demo==1.0 in" in caplog.text
 
 
-def test_environment_defaults_and_failures(tmp_path, monkeypatch):
+def test_environment_defaults_and_failures(tmp_path, monkeypatch, caplog):
+    caplog.set_level("INFO")
     for key, value in {
         "PACKAGE": "demo",
         "VERSION": "1.0",
@@ -101,6 +105,8 @@ def test_environment_defaults_and_failures(tmp_path, monkeypatch):
 
     monkeypatch.setattr(cli.sdist, "run", fail)
     assert cli.execute("build-sdist", []) == 1
+    assert "Failed: Task build-sdist for demo==1.0" in caplog.text
+    assert "Completed: Task build-sdist" not in caplog.text
     assert cli.execute("build-sdist", ["--command-timeout", "0"]) == 1
     with pytest.raises(SystemExit) as error:
         cli.parser("build-wheels").parse_args(["--build-type", "unsupported"])

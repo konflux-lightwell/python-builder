@@ -146,7 +146,6 @@ spec:
         - --image-expires-after=$(params.IMAGE_EXPIRES_AFTER)
         - --wheel-server-url=$(params.WHEEL_SERVER_URL)
         - --pulp-secret=/mnt/pulp-secret
-        - --auth-file=$(workspaces.registry-auth.path)/.dockerconfigjson
       volumeMounts:
         - name: trusted-ca
           mountPath: /mnt/trusted-ca
@@ -177,11 +176,3 @@ spec:
         limits:
           cpu: '1'
           memory: 256Mi
-
-  workspaces:
-    - name: registry-auth
-      description: >-
-        Registry push credentials: bind a kubernetes.io/dockerconfigjson Secret containing .dockerconfigjson.
-        Also attach the Secret to the TaskRun service account for trusted-artifact steps.
-      mountPath: /mnt/registry-auth
-      readOnly: true

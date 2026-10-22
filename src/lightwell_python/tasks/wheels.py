@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 
@@ -16,12 +17,15 @@ from lightwell_python.runtime import (
     Runner,
     TaskError,
     copy_input_tree,
+    log_stage,
     read_json,
     write_json,
     write_results,
 )
 from lightwell_python.versioning import version_counts
 from lightwell_python.wheel_metadata import extract_sbom, verify_primary_wheels
+
+LOG = logging.getLogger(__name__)
 
 
 def run(
@@ -77,18 +81,30 @@ def run(
     if build_type == BuildType.VALIDATED and wheel_server:
         raise TaskError("Validated builds cannot use a prebuilt wheel server")
 
+    LOG.info(
+        "Building wheels for %s; computed version: %s; build type: %s; wheel cache: %s",
+        package.requirement,
+        computed,
+        build_type.value,
+        "enabled" if wheel_server else "disabled",
+    )
     sdists = workdir / "sdists-repo"
-    copy_input_tree(sdists_dir, sdists)
-    find_sdist(sdists, package, computed)
+    with log_stage("Copy and validate restored sdist inputs"):
+        copy_input_tree(sdists_dir, sdists)
+        archive = find_sdist(sdists, package, computed)
+        LOG.info("Using sdist: %s", archive)
 
-    config = BuildConfig.load(sdists / "build-configs/packages" / f"{package.name}.json", package)
-    expected = config.environment(package, computed)
-    environment = read_json(sdists / "backend-env.json")
-    if environment != expected:
-        raise TaskError("Backend environment does not match the build-config snapshot")
+    with log_stage("Validate configuration snapshot and render Fromager settings"):
+        config = BuildConfig.load(
+            sdists / "build-configs/packages" / f"{package.name}.json", package
+        )
+        expected = config.environment(package, computed)
+        environment = read_json(sdists / "backend-env.json")
+        if environment != expected:
+            raise TaskError("Backend environment does not match the build-config snapshot")
+        settings = workdir / "fromager-settings"
+        config.render_settings(settings / f"{package.name}.yaml", package, computed)
 
-    settings = workdir / "fromager-settings"
-    config.render_settings(settings / f"{package.name}.yaml", package, computed)
     output = workdir / "output"
     with backend_environment(runner.environment | environment, pulp_secret) as env:
         run_fromager(
@@ -103,16 +119,25 @@ def run(
             jobs=jobs,
         )
 
-    sync_sdists(sdists / "builds", output / "sdists-repo/builds", package, computed)
     artifact = workdir / "artifact"
-    collect_artifacts(output, artifact)
+    with log_stage("Collect built wheels, sdists, and summaries"):
+        sync_sdists(sdists / "builds", output / "sdists-repo/builds", package, computed)
+        collect_artifacts(output, artifact)
+        LOG.info("Collected %d artifact files in %s", len(list(artifact.iterdir())), artifact)
 
-    manifest = build_manifest(output, build_type, config.allowed)
-    primary = verify_primary_wheels(artifact, package, computed)
-    manifest_path = workdir / "build-manifest.json"
-    write_json(manifest_path, manifest)
-    sbom = workdir / "sbom.spdx.json"
-    extract_sbom(primary[0], sbom)
+    with log_stage("Verify wheel provenance, versions, and primary SBOM"):
+        manifest = build_manifest(output, build_type, config.allowed)
+        primary = verify_primary_wheels(artifact, package, computed)
+        manifest_path = workdir / "build-manifest.json"
+        write_json(manifest_path, manifest)
+        sbom = workdir / "sbom.spdx.json"
+        extract_sbom(primary[0], sbom)
+        LOG.info(
+            "Verified %d primary wheels; manifest: %d produced, %d cached packages",
+            len(primary),
+            len(manifest["produced"]),
+            len(manifest["cached"]),
+        )
 
     annotations = {
         "dev.lightwell.package": package.name,
@@ -135,16 +160,23 @@ def run(
     if any(not re.fullmatch(r"[\w][\w.-]{0,127}", t, flags=re.ASCII) for t in [tag, *tags]):
         raise TaskError("Computed image tag is not a valid OCI tag")
 
-    reference = registry.push(image, artifact, "application/vnd.python.wheels", annotations, tags)
-    sbom_ref = registry.attach_sbom(reference, sbom)
+    with log_stage("Publish wheels OCI artifact"):
+        reference = registry.push(
+            image, artifact, "application/vnd.python.wheels", annotations, tags
+        )
+        LOG.info("Published wheels digest: %s", reference.rsplit("@", 1)[-1])
+    with log_stage("Attach primary SPDX SBOM"):
+        sbom_ref = registry.attach_sbom(reference, sbom)
 
-    write_json(manifest_output, manifest)
-    write_results(
-        results,
-        {
-            "IMAGE_URL": image,
-            "IMAGE_DIGEST": reference.rsplit("@", 1)[1],
-            "IMAGE_REF": reference,
-            "SBOM_BLOB_URL": sbom_ref,
-        },
-    )
+    with log_stage("Finalize build manifest handoff and task results"):
+        write_json(manifest_output, manifest)
+        write_results(
+            results,
+            {
+                "IMAGE_URL": image,
+                "IMAGE_DIGEST": reference.rsplit("@", 1)[1],
+                "IMAGE_REF": reference,
+                "SBOM_BLOB_URL": sbom_ref,
+            },
+        )
+    LOG.info("Build manifest ready: %s; task results: %s", manifest_output, results)

@@ -34,7 +34,12 @@ def config_repo(tmp_path, package_config):
     return path
 
 
-def test_source_end_to_end(tmp_path, git_repo, config_repo):
+@pytest.mark.parametrize(
+    "build_type,computed,b",
+    [(BuildType.BACKPORT, "1.0+rhlw.1", 1), (BuildType.VALIDATED, "1.0", 0)],
+)
+def test_source_end_to_end(tmp_path, git_repo, config_repo, caplog, build_type, computed, b):
+    caplog.set_level("INFO")
     repo, git = git_repo
     git("commit", "--allow-empty", "-qm", "fix")
     work = tmp_path / "task"
@@ -44,20 +49,26 @@ def test_source_end_to_end(tmp_path, git_repo, config_repo):
         workdir=work,
         results=results,
         package=Package("demo", "1.0"),
-        build_type=BuildType.BACKPORT,
+        build_type=build_type,
         source_dir=repo,
         sdists_output=tmp_path / "sdists-output",
         config_url=str(config_repo),
         config_revision="HEAD",
         runner=Runner(),
     )
-    assert (results / "COMPUTED_VERSION").read_text() == "1.0+rhlw.1"
-    assert (results / "B_VALUE").read_text() == "1"
+    assert (results / "COMPUTED_VERSION").read_text() == computed
+    assert (results / "B_VALUE").read_text() == str(b)
     assert (repo / "source/PKG-INFO").read_text().endswith("Version: 1.0\n")
     assert read_json(tmp_path / "sdists-output/backend-env.json") == {}
     assert (tmp_path / "sdists-output/build-configs/.commit").read_text().strip()
-    assert (tmp_path / "sdists-output/downloads/demo-1.0+rhlw.1.tar.gz").is_file()
+    assert (tmp_path / f"sdists-output/downloads/demo-{computed}.tar.gz").is_file()
     assert not (results / "SDISTS_ARTIFACT").exists()
+    assert f"Preparing source for demo==1.0; build type: {build_type.value}" in caplog.text
+    assert f"Computed version: {computed} (B={b}, N=0)" in caplog.text
+    assert "resolved commit:" in caplog.text
+    assert "Created sdist: demo-1.0.tar.gz" in caplog.text
+    assert "Completed: Finalize sdist handoff and task results" in caplog.text
+    assert f"Sdist handoff ready: {tmp_path / 'sdists-output'}" in caplog.text
 
 
 def test_config_clone_credentials_not_in_arguments(tmp_path):
@@ -90,7 +101,8 @@ def sdist_input(tmp_path):
     return path
 
 
-def test_normalize_preserves_evidence_and_binds_digests(tmp_path, sdist_input):
+def test_normalize_preserves_evidence_and_binds_digests(tmp_path, sdist_input, caplog):
+    caplog.set_level("INFO")
     work = tmp_path / "task"
     work.mkdir()
 
@@ -120,6 +132,10 @@ def test_normalize_preserves_evidence_and_binds_digests(tmp_path, sdist_input):
     assert transformation["output"]["sha256"] == sha256(artifact / "demo-1.0.tar.gz")
     assert transformation["source_origin"]["sha256"] == sha256(sdist_input / "source-origin.json")
     assert (tmp_path / "results/CHAINS-GIT_COMMIT").read_text() == "abc"
+    assert "Completed: Fromager prepare-source" in caplog.text
+    assert "Completed: Fromager build-sdist" in caplog.text
+    assert "Normalized sdist: demo-1.0.tar.gz; SHA-256:" in caplog.text
+    assert "Normalized sdist task results ready:" in caplog.text
 
 
 def test_normalize_rejects_stale_output(tmp_path, sdist_input):
@@ -175,7 +191,8 @@ def wheel_builder(make_wheel, *, unauthorized=False):
     return FakeRunner(build)
 
 
-def test_wheels_complete_task(tmp_path, wheel_input, make_wheel):
+def test_wheels_complete_task(tmp_path, wheel_input, make_wheel, caplog):
+    caplog.set_level("INFO")
     work = tmp_path / "task"
     work.mkdir()
     registry = FakeRegistry()
@@ -192,7 +209,7 @@ def test_wheels_complete_task(tmp_path, wheel_input, make_wheel):
         registry=registry,
         runner=runner,
         image_expires="1d",
-        wheel_server="https://packages.redhat.com/simple",
+        wheel_server="https://user:cache-secret@packages.redhat.com/simple",
     )
     assert [call[0] for call in registry.calls] == ["push", "sbom"]
     assert registry.calls[0][5] == ["demo-1.0-rhlw.1", "demo-1.0-rhlw.1-abcdef1"]
@@ -207,6 +224,12 @@ def test_wheels_complete_task(tmp_path, wheel_input, make_wheel):
     assert all(
         args[0] not in {"bash", "build-wheels", "collect-build-files"} for args, _ in runner.calls
     )
+    assert "wheel cache: enabled" in caplog.text
+    assert "cache-secret" not in caplog.text
+    assert "Processing wheel 1/1: demo-1.0+rhlw.1-py3-none-any.whl" in caplog.text
+    assert "Verified 1 primary wheels; manifest: 1 produced, 0 cached packages" in caplog.text
+    assert "Completed: Attach primary SPDX SBOM" in caplog.text
+    assert "Build manifest ready:" in caplog.text
 
 
 def test_wheels_do_not_publish_unauthorized_build(tmp_path, wheel_input, make_wheel):
@@ -231,7 +254,8 @@ def test_wheels_do_not_publish_unauthorized_build(tmp_path, wheel_input, make_wh
     assert not (tmp_path / "manifest-output.json").exists()
 
 
-def test_source_failure_does_not_expose_handoff(tmp_path, git_repo):
+def test_source_failure_does_not_expose_handoff(tmp_path, git_repo, caplog):
+    caplog.set_level("INFO")
     repo, _ = git_repo
     work = tmp_path / "scratch"
     work.mkdir()
@@ -253,9 +277,14 @@ def test_source_failure_does_not_expose_handoff(tmp_path, git_repo):
         )
     assert not (tmp_path / "handoff").exists()
     assert not (tmp_path / "results").exists()
+    assert "Failed: Clone and validate build configuration" in caplog.text
+    assert "Completed: Clone and validate build configuration" not in caplog.text
+    assert "Sdist handoff ready:" not in caplog.text
 
 
-def test_failed_sbom_attachment_does_not_stage_manifest(tmp_path, wheel_input, make_wheel):
+def test_failed_sbom_attachment_does_not_stage_manifest(tmp_path, wheel_input, make_wheel, caplog):
+    caplog.set_level("INFO")
+
     class FailingRegistry(FakeRegistry):
         def attach_sbom(self, reference, sbom):
             raise TaskError("SBOM upload failed")
@@ -277,3 +306,7 @@ def test_failed_sbom_attachment_does_not_stage_manifest(tmp_path, wheel_input, m
         )
     assert not (tmp_path / "manifest.json").exists()
     assert not (tmp_path / "results").exists()
+    assert "Completed: Publish wheels OCI artifact" in caplog.text
+    assert "Failed: Attach primary SPDX SBOM" in caplog.text
+    assert "Completed: Attach primary SPDX SBOM" not in caplog.text
+    assert "Build manifest ready:" not in caplog.text
