@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 import tempfile
-from collections.abc import Iterator, Mapping
+from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -93,7 +93,7 @@ class Registry:
     auth_file: Path | None = None
 
     @contextmanager
-    def auth(self, reference: str) -> Iterator[Path]:
+    def auth(self, reference: str) -> Generator[Path, None, None]:
         """Temporarily materialize credentials scoped to an image repository.
 
         Args:

@@ -7,7 +7,7 @@ import re
 import shutil
 import tempfile
 import zipfile
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -19,7 +19,9 @@ from lightwell_python.wheel_metadata import patch_wheel, system_libraries
 
 
 @contextmanager
-def backend_environment(base: dict[str, str], secret: Path | None) -> Iterator[dict[str, str]]:
+def backend_environment(
+    base: dict[str, str], secret: Path | None
+) -> Generator[dict[str, str], None, None]:
     """Prepare a build environment with optional temporary Pulp credentials.
 
     Args:
