@@ -15,7 +15,7 @@ maintained in fath-cuan's `tekton/task/attach-build-index`.
 ## Configuration
 
 - Set `PYTHON_BUILDER_IMAGE` to a digest-pinned image built from this repo's
-  [Containerfile](../../Containerfile). The task YAML has no default image.
+  [Containerfile.cli](../../Containerfile.cli). The task YAML has no default image.
 - Bind source preparation's `git-auth` workspace to `username`/`password` files
   for the build-config clone.
 - Registry pushes use the existing Konflux `select-oci-auth` mechanism. No extra

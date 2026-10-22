@@ -1,7 +1,7 @@
 """Check the installed builder tools without network access or registry writes.
 
 Run this with the task interpreter, /opt/lightwell/bin/python. The
-Containerfile runs it after assembly so missing tools, plugins, shared libraries,
+Containerfile.cli runs it after assembly so missing tools, plugins, shared libraries,
 or CLI options fail the image build before the image can be used by Tekton.
 """
 

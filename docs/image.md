@@ -1,6 +1,6 @@
 # Task execution image
 
-The [Containerfile](../Containerfile) extends a digest-pinned plumbing-builder
+The [Containerfile.cli](../Containerfile.cli) extends a digest-pinned plumbing-builder
 image for Linux x86_64. Publish the result and pass its digest as
 `PYTHON_BUILDER_IMAGE` to the [Tekton tasks](../tekton/tasks/README.md).
 
@@ -23,12 +23,12 @@ For task dependencies, edit `pyproject.toml`, run `uv lock`, and commit `uv.lock
 
 ```sh
 podman build --platform linux/amd64 --target python-builder \
-  -f Containerfile -t localhost/lightwell-python-builder:dev .
+  -f Containerfile.cli -t localhost/lightwell-python-builder:dev .
 ```
 
 To change the base, add
 `--build-arg BUILDER_IMAGE=quay.io/redhat-user-workloads/calunga-tenant/plumbing-builder@sha256:<digest>`.
-The exact default image pins are in the Containerfile.
+The exact default image pins are in Containerfile.cli.
 
 The build checks package dependencies and runs [runtime smoke checks](../tests/check_runtime.py)
 as UID 1001: CLI options, native tools, Fromager plugins (including `faiss_cpu`),

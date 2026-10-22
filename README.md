@@ -4,6 +4,9 @@ Python entrypoints and a container image for Lightwell's build and sdist ingesti
 pipelines. Each Tekton task runs one CLI command; trusted-artifact `use` and
 `create` remain separate steps in `quay.io/konflux-ci/build-trusted-artifacts`.
 
+`Containerfile` builds the original native builder. `Containerfile.cli` builds
+the Python task image on the pinned plumbing-builder base.
+
 | Task | Command | Purpose |
 | --- | --- | --- |
 | Source preparation | `lightwell-source-to-sdist` | Resolve build config/version and stage a deterministic sdist |

@@ -6,8 +6,9 @@
   `docs/migration.md` for task contracts and deliberate behavior changes.
 - `build_scripts/`, `scripts/`, `overrides/`, and native dependency pins are
   retained builder-image tooling with a separate lifecycle. Keep task-package
-  changes separate from changes to that tooling.
-- `Containerfile` builds the current task image using the pinned plumbing-builder
+  changes separate from changes to that tooling. Preserve the original native
+  builder definition in `Containerfile`.
+- `Containerfile.cli` builds the current task image using the pinned plumbing-builder
   base; it belongs to task-image integration. Local native sources and overrides
   do not participate in this image build. See `docs/image.md` and
   `tests/check_runtime.py` for its runtime contract.
