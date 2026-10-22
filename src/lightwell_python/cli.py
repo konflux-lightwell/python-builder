@@ -1,4 +1,4 @@
-"""Python task logic operating between Tekton trusted-artifact use/create steps."""
+"""Task-specific command-line interfaces and shared execution setup."""
 
 from __future__ import annotations
 
@@ -6,77 +6,195 @@ import argparse
 import logging
 import os
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 from lightwell_python.registry import Registry
 from lightwell_python.runtime import BuildType, Package, Runner, TaskError
 from lightwell_python.tasks import sdist, source, wheels
 
 
+class TaskContext(TypedDict):
+    """Validated runtime inputs shared by the task handlers.
+
+    Attributes:
+        workdir: Isolated scratch directory retained for diagnosis.
+        results: Absolute directory receiving successful task results.
+        package: Validated distribution name and upstream version.
+        runner: Process adapter configured with timeout and certificate trust.
+    """
+
+    workdir: Path
+    results: Path
+    package: Package
+    runner: Runner
+
+
+TaskHandler = Callable[[argparse.Namespace, TaskContext], None]
+
+
+def _option(
+    target: argparse.ArgumentParser,
+    name: str,
+    *,
+    default: Any = None,
+    required: bool = False,
+    **kwargs: Any,
+) -> None:
+    """Register an option with its uppercase environment-variable fallback.
+
+    The environment key follows the public option name, even when ``dest`` maps
+    the parsed value to a different task argument name.
+    """
+    value = os.environ.get(name.upper().replace("-", "_"), default)
+    target.add_argument("--" + name, default=value, required=required and value is None, **kwargs)
+
+
+def _common_parser(task: str, handler: TaskHandler) -> argparse.ArgumentParser:
+    """Create shared options and bind the task's argparse dispatch target."""
+    result = argparse.ArgumentParser(
+        description=f"Run Lightwell {task} using locally restored inputs."
+    )
+    result.set_defaults(func=handler)
+
+    _option(result, "package", required=True)
+    _option(result, "version", required=True)
+    _option(result, "workdir", type=Path, default=Path("/var/workdir"))
+    _option(result, "results-dir", dest="results", type=Path, default=Path("/tekton/results"))
+    _option(result, "ca-bundle", type=Path, default=Path("/mnt/trusted-ca/ca-bundle.crt"))
+    _option(result, "auth-file", type=Path)
+    _option(result, "command-timeout", type=float, default=7200)
+    result.add_argument("--verbose", action="store_true")
+    return result
+
+
+def _publication_options(target: argparse.ArgumentParser) -> None:
+    """Add the restored input and registry options shared by wheel and sdist builds."""
+    _option(target, "sdists-dir", type=Path, required=True)
+    _option(target, "image", required=True)
+    _option(target, "image-expires-after", dest="image_expires", default="")
+
+
+def source_parser() -> argparse.ArgumentParser:
+    """Define source preparation arguments and select its handler.
+
+    Returns:
+        A parser for the source-to-sdist entrypoint, including environment defaults.
+    """
+    result = _common_parser("source-to-sdist", _run_source)
+    _option(result, "build-type", choices=[mode.value for mode in BuildType], required=True)
+    _option(result, "source-dir", type=Path, required=True)
+    _option(result, "sdists-output", type=Path, required=True)
+    _option(result, "build-configs-repo-url", dest="config_url", required=True)
+    _option(result, "build-configs-revision", dest="config_revision", required=True)
+    _option(result, "git-auth", type=Path)
+    return result
+
+
+def wheels_parser() -> argparse.ArgumentParser:
+    """Define wheel build arguments and select its handler.
+
+    Returns:
+        A parser for the build-wheels entrypoint, including environment defaults.
+    """
+    result = _common_parser("build-wheels", _run_wheels)
+    _publication_options(result)
+    _option(result, "build-type", choices=[mode.value for mode in BuildType], required=True)
+    _option(result, "computed-version", dest="computed", required=True)
+    _option(result, "manifest-output", type=Path, required=True)
+    _option(result, "wheel-server-url", dest="wheel_server", default="")
+    _option(result, "pulp-secret", type=Path, default=Path("/mnt/pulp-secret"))
+    _option(result, "overrides", type=Path, default=Path("/usr/local/share/fromager/overrides"))
+    _option(result, "jobs", type=int)
+    return result
+
+
+def sdist_parser() -> argparse.ArgumentParser:
+    """Define sdist normalization arguments and select its handler.
+
+    Returns:
+        A parser for the build-sdist entrypoint, including environment defaults.
+    """
+    result = _common_parser("build-sdist", _run_sdist)
+    _publication_options(result)
+    _option(result, "git-url", required=True)
+    _option(result, "revision", required=True)
+    return result
+
+
+def _run_source(args: argparse.Namespace, context: TaskContext) -> None:
+    """Pass parsed source preparation inputs to the task implementation."""
+    source.run(
+        **context,
+        build_type=BuildType(args.build_type),
+        source_dir=args.source_dir.resolve(),
+        sdists_output=args.sdists_output.resolve(),
+        config_url=args.config_url,
+        config_revision=args.config_revision,
+        git_auth=args.git_auth,
+    )
+
+
+def _run_wheels(args: argparse.Namespace, context: TaskContext) -> None:
+    """Pass parsed wheel build inputs and registry credentials to the task."""
+    wheels.run(
+        **context,
+        build_type=BuildType(args.build_type),
+        computed=args.computed,
+        sdists_dir=args.sdists_dir.resolve(),
+        registry=Registry(context["runner"], args.auth_file),
+        image=args.image,
+        manifest_output=args.manifest_output.resolve(),
+        wheel_server=args.wheel_server,
+        pulp_secret=args.pulp_secret,
+        image_expires=args.image_expires,
+        overrides=args.overrides,
+        jobs=args.jobs,
+    )
+
+
+def _run_sdist(args: argparse.Namespace, context: TaskContext) -> None:
+    """Pass parsed sdist normalization inputs and registry credentials to the task."""
+    sdist.run(
+        **context,
+        sdists_dir=args.sdists_dir.resolve(),
+        registry=Registry(context["runner"], args.auth_file),
+        image=args.image,
+        git_url=args.git_url,
+        revision=args.revision,
+        image_expires=args.image_expires,
+    )
+
+
+PARSER_FACTORIES: dict[str, Callable[[], argparse.ArgumentParser]] = {
+    "source-to-sdist": source_parser,
+    "build-wheels": wheels_parser,
+    "build-sdist": sdist_parser,
+}
+
+
 def parser(task: str) -> argparse.ArgumentParser:
-    """Build the command-line interface for a single pipeline task.
+    """Select the independent argument definition for a task.
 
     Args:
         task: One of source-to-sdist, build-wheels, or build-sdist.
 
     Returns:
-        A parser whose options also accept uppercase underscore environment defaults.
-        Inputs are local paths restored by Tekton's trusted-artifact steps.
+        A fresh parser with environment defaults and its bound execution target.
 
     Raises:
         ValueError: The task name is not supported.
     """
-    result = argparse.ArgumentParser(
-        description=f"Run Lightwell {task} using locally restored inputs."
-    )
-
-    def option(name: str, *, default: Any = None, required: bool = False, **kwargs: Any) -> None:
-        """Register one CLI option with its matching environment fallback."""
-        value = os.environ.get(name.upper().replace("-", "_"), default)
-        result.add_argument(
-            "--" + name, default=value, required=required and value is None, **kwargs
-        )
-
-    option("package", required=True)
-    option("version", required=True)
-    option("workdir", type=Path, default=Path("/var/workdir"))
-    option("results-dir", type=Path, default=Path("/tekton/results"))
-    option("ca-bundle", type=Path, default=Path("/mnt/trusted-ca/ca-bundle.crt"))
-    option("auth-file", type=Path)
-    option("command-timeout", type=float, default=7200)
-    result.add_argument("--verbose", action="store_true")
-    if task != "build-sdist":
-        option("build-type", choices=[mode.value for mode in BuildType], required=True)
-    if task == "source-to-sdist":
-        option("source-dir", type=Path, required=True)
-    else:
-        option("sdists-dir", type=Path, required=True)
-        option("image", required=True)
-        option("image-expires-after", default="")
-    if task == "build-wheels":
-        option("computed-version", required=True)
-    if task == "source-to-sdist":
-        option("sdists-output", type=Path, required=True)
-        option("build-configs-repo-url", required=True)
-        option("build-configs-revision", required=True)
-        option("git-auth", type=Path)
-    elif task == "build-wheels":
-        option("manifest-output", type=Path, required=True)
-        option("wheel-server-url", default="")
-        option("pulp-secret", type=Path, default=Path("/mnt/pulp-secret"))
-        option("overrides", type=Path, default=Path("/usr/local/share/fromager/overrides"))
-        option("jobs", type=int)
-    elif task == "build-sdist":
-        option("git-url", required=True)
-        option("revision", required=True)
-    else:
-        raise ValueError(f"Unknown task: {task}")
-    return result
+    try:
+        factory = PARSER_FACTORIES[task]
+    except KeyError as exc:
+        raise ValueError(f"Unknown task: {task}") from exc
+    return factory()
 
 
 def execute(task: str, argv: list[str] | None = None) -> int:
-    """Parse inputs, prepare scratch space, and dispatch the task implementation.
+    """Parse inputs, prepare scratch space, and invoke the argparse dispatch target.
 
     Args:
         task: Task name selecting the parser and implementation.
@@ -106,52 +224,17 @@ def execute(task: str, argv: list[str] | None = None) -> int:
         if args.ca_bundle.is_file():
             for key in ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "GIT_SSL_CAINFO"):
                 runner.environment[key] = str(args.ca_bundle.resolve())
-        registry = Registry(runner, args.auth_file)
+
         args.workdir.mkdir(parents=True, exist_ok=True)
-        # Keep intermediate outputs for diagnosis; each invocation is isolated.
         workdir = Path(tempfile.mkdtemp(prefix=f"{task}-", dir=args.workdir)).resolve()
         logging.getLogger(__name__).info("Task workspace: %s", workdir)
-        common = {
-            "workdir": workdir,
-            "results": args.results_dir.resolve(),
-            "package": package,
-            "runner": runner,
-        }
-        if task == "source-to-sdist":
-            source.run(
-                **common,
-                build_type=BuildType(args.build_type),
-                source_dir=args.source_dir.resolve(),
-                sdists_output=args.sdists_output.resolve(),
-                config_url=args.build_configs_repo_url,
-                config_revision=args.build_configs_revision,
-                git_auth=args.git_auth,
-            )
-        elif task == "build-wheels":
-            wheels.run(
-                **common,
-                build_type=BuildType(args.build_type),
-                computed=args.computed_version,
-                sdists_dir=args.sdists_dir.resolve(),
-                registry=registry,
-                image=args.image,
-                manifest_output=args.manifest_output.resolve(),
-                wheel_server=args.wheel_server_url,
-                pulp_secret=args.pulp_secret,
-                image_expires=args.image_expires_after,
-                overrides=args.overrides,
-                jobs=args.jobs,
-            )
-        elif task == "build-sdist":
-            sdist.run(
-                **common,
-                sdists_dir=args.sdists_dir.resolve(),
-                registry=registry,
-                image=args.image,
-                git_url=args.git_url,
-                revision=args.revision,
-                image_expires=args.image_expires_after,
-            )
+        context = TaskContext(
+            workdir=workdir,
+            results=args.results.resolve(),
+            package=package,
+            runner=runner,
+        )
+        args.func(args, context)
     except (TaskError, OSError, ValueError) as exc:
         logging.getLogger(__name__).error("%s", exc)
         return 1

@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from lightwell_python import cli
@@ -125,3 +127,99 @@ def test_installed_entrypoints_return_task_status(monkeypatch, entry, task):
 def test_unknown_task():
     with pytest.raises(ValueError, match="Unknown task"):
         cli.parser("unknown")
+
+
+@pytest.mark.parametrize(
+    "task,module,environment,override,expected",
+    [
+        (
+            "source-to-sdist",
+            "source",
+            {
+                "BUILD_TYPE": "Validated",
+                "SOURCE_DIR": "source",
+                "SDISTS_OUTPUT": "handoff",
+                "BUILD_CONFIGS_REPO_URL": "https://example/configs",
+                "BUILD_CONFIGS_REVISION": "main",
+            },
+            "--build-configs-revision=pinned-commit",
+            {"config_url": "https://example/configs", "config_revision": "pinned-commit"},
+        ),
+        (
+            "build-wheels",
+            "wheels",
+            {
+                "BUILD_TYPE": "Backport",
+                "SDISTS_DIR": "sdists",
+                "IMAGE": "registry/repo",
+                "COMPUTED_VERSION": "1.0+rhlw.1",
+                "MANIFEST_OUTPUT": "manifest.json",
+                "WHEEL_SERVER_URL": "https://example/wheels",
+                "JOBS": "4",
+            },
+            "--wheel-server-url=",
+            {"computed": "1.0+rhlw.1", "wheel_server": "", "jobs": 4},
+        ),
+        (
+            "build-sdist",
+            "sdist",
+            {
+                "SDISTS_DIR": "sdists",
+                "IMAGE": "registry/repo",
+                "IMAGE_EXPIRES_AFTER": "1d",
+                "GIT_URL": "https://example/source",
+                "REVISION": "abc",
+            },
+            "--image-expires-after=2d",
+            {"image_expires": "2d", "git_url": "https://example/source", "revision": "abc"},
+        ),
+    ],
+)
+def test_environment_names_survive_argument_destinations(
+    tmp_path, monkeypatch, task, module, environment, override, expected
+):
+    for key, value in {
+        "PACKAGE": "demo",
+        "VERSION": "1.0",
+        "WORKDIR": str(tmp_path / "work"),
+        "RESULTS_DIR": str(tmp_path / "results"),
+        "COMMAND_TIMEOUT": "45",
+        **environment,
+    }.items():
+        monkeypatch.setenv(key, value)
+    calls = []
+    monkeypatch.setattr(getattr(cli, module), "run", lambda **kwargs: calls.append(kwargs))
+
+    assert cli.execute(task, [override]) == 0
+    assert len(calls) == 1
+    assert calls[0].items() >= expected.items()
+    assert calls[0]["runner"].timeout == 45
+    assert calls[0]["results"] == tmp_path / "results"
+
+
+def test_execute_invokes_the_argparse_target(tmp_path, monkeypatch):
+    selected = cli.sdist_parser()
+    calls = []
+    selected.set_defaults(func=lambda args, context: calls.append((args, context)))
+    monkeypatch.setattr(cli, "parser", lambda _: selected)
+
+    assert (
+        cli.execute(
+            "build-sdist",
+            [
+                "--package=demo",
+                "--version=1.0",
+                "--sdists-dir=input",
+                "--image=registry/repo",
+                "--git-url=https://example/source",
+                "--revision=abc",
+                f"--workdir={tmp_path}",
+            ],
+        )
+        == 0
+    )
+    assert len(calls) == 1
+    args, context = calls[0]
+    assert args.sdists_dir == Path("input")
+    assert context["package"].name == "demo"
+    assert context["workdir"].parent == tmp_path
