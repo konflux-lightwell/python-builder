@@ -77,7 +77,8 @@ def compute_version(
         b = int(git("rev-list", "--count", f"{ingestion}..{baseline}"))
         n = int(git("rev-list", "--count", f"{baseline}..{head}"))
     suffix = f"rhlw.{b}" + (f".n.{n}" if n else "")
-    return ComputedVersion(package.version + separator + suffix, b, n, git("rev-parse", "--short=7", "HEAD"))
+    head = git("rev-parse", "--short=7", "HEAD")
+    return ComputedVersion(package.version + separator + suffix, b, n, head)
 
 
 def _suffix_separator(upstream: str) -> str:
