@@ -38,13 +38,19 @@ fi
 # Note: OpenBLAS build requires system GCC
 # USE_OPENMP=0 uses pthreads instead of OpenMP (matches upstream numpy/scipy,
 # avoids fork()/multiprocessing hazards and FP reduction divergence)
-# Parallelism is capped by available cgroup memory (not just nproc) -- this
-# build also compiles the full BLAS/LAPACK Fortran reference test suite, and
-# nproc reports the node's core count rather than the container's actual
-# memory allocation, which was OOM-killing the build under a tight memory
-# limit (LWLP-3636).
+# Build the "shared" target explicitly rather than the default ("all",
+# which depends on "tests"): OpenBLAS's default target also compiles and
+# runs its entire BLAS/LAPACK/CBLAS self-test suite (test/utest/ctest),
+# which we don't need for a packaging build and whose giant reference test
+# drivers (zblat3.f, sblat2.f, etc.) were what actually OOM-killed this
+# step even after capping make's parallelism (LWLP-3636). "shared" still
+# depends on "libs" and "netlib", so the library itself is unaffected.
+# Parallelism is also capped by available cgroup memory (not just nproc,
+# which reports the node's core count rather than the container's actual
+# allocation) as defense in depth for the remaining (non-test) compile.
 OPENBLAS_MAKE_JOBS=$(get_memory_safe_jobs 1536)
 make -j"${OPENBLAS_MAKE_JOBS}" \
+    shared \
     PREFIX="${PREFIX}" \
     DYNAMIC_ARCH=1 \
     USE_OPENMP=0 \
