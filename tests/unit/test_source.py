@@ -2,7 +2,7 @@ import os
 import tarfile
 
 import pytest
-from packaging.version import Version
+from packaging.version import InvalidVersion, Version
 
 from lightwell_python.archives import create_sdist, find_sdist
 from lightwell_python.config import BuildConfig, expand
@@ -66,7 +66,7 @@ def test_folded_versions_are_valid_pep_440_and_sort_correctly():
         )
         # The joined form is valid PEP 440; the double-plus form is not.
         Version(computed)
-        with pytest.raises(Exception):
+        with pytest.raises(InvalidVersion):
             Version("1.0+upstream.1+rhlw.1")
     # Base upstream < remediated build < next upstream patch.
     assert Version("1.0") < Version("1.0+upstream.1.rhlw.1")
