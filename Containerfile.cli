@@ -1,7 +1,7 @@
 # Match the native build environment currently used by orchestrator.
 ARG BUILDER_IMAGE=quay.io/redhat-user-workloads/calunga-tenant/plumbing-builder@sha256:d8355de03d57adef033743da1f1a3bb2f0ff038192e3220b155e9dd7dba5d37c
 
-FROM quay.io/konflux-ci/oras:latest@sha256:1beeecce012c99794568f74265c065839f9703d28306a8430b667f639343a98b AS oras-bin
+FROM quay.io/konflux-ci/oras:latest@sha256:308df510e55d560fe60efc9133bd09f67a72fbeea54900f3d711f8e27fcc624f AS oras-bin
 FROM ghcr.io/sigstore/cosign/cosign:v3.0.2@sha256:b29487e48205d875c324c79583e2806d9d269c0fa299e0861bbec023d8430c8b AS cosign-bin
 
 # Install the package and locked runtime dependencies without development tools.
