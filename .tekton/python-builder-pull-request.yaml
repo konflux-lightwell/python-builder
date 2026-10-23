@@ -541,8 +541,22 @@ spec:
       optional: true
     - name: netrc
       optional: true
+  taskRunSpecs:
+  - pipelineTaskName: build-container
+    timeout: 3h
+    stepSpecs:
+    - name: build
+      computeResources:
+        requests:
+          cpu: '8'
+          memory: 12Gi
+        limits:
+          cpu: '8'
+          memory: 12Gi
   taskRunTemplate:
     serviceAccountName: build-pipeline-python-builder
+  timeouts:
+    pipeline: 3h30m0s
   workspaces:
   - name: git-auth
     secret:
