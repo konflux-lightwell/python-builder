@@ -2,6 +2,7 @@ import os
 import tarfile
 
 import pytest
+from packaging.version import Version
 
 from lightwell_python.archives import create_sdist, find_sdist
 from lightwell_python.config import BuildConfig, expand
@@ -20,6 +21,58 @@ def test_version_lineage(git_repo, kind, b, n):
     version = compute_version(repo, Package("demo", "1.0"), kind, Runner())
     assert (version.b, version.n) == (b, n)
     assert version_counts(Package("demo", "1.0"), version.full, kind) == (b, n)
+
+
+@pytest.mark.parametrize(
+    "kind,b,n,expected",
+    [
+        (BuildType.BACKPORT, 2, 0, "1.0+upstream.1.rhlw.2"),
+        (BuildType.NOVEL, 1, 1, "1.0+upstream.1.rhlw.1.n.1"),
+    ],
+)
+@pytest.mark.parametrize("git_repo", ["1.0+upstream.1"], indirect=True)
+def test_version_marker_joins_existing_local_segment(git_repo, kind, b, n, expected):
+    repo, git = git_repo
+    git("commit", "--allow-empty", "-qm", "fix")
+    git("tag", "-a", "baseline/1.0+upstream.1", "-m", "baseline")
+    git("commit", "--allow-empty", "-qm", "novel")
+    version = compute_version(repo, Package("demo", "1.0+upstream.1"), kind, Runner())
+    assert version.full == expected
+    assert version_counts(Package("demo", "1.0+upstream.1"), version.full, kind) == (b, n)
+
+
+@pytest.mark.parametrize(
+    "computed",
+    [
+        "1.0+upstream.1+rhlw.1",
+        "1.0+upstream.1.rhlw.garbage",
+        "1.0+upstream.1",
+    ],
+)
+def test_local_segment_computed_versions_rejected(computed):
+    package = Package("demo", "1.0+upstream.1")
+    with pytest.raises(TaskError):
+        version_counts(package, computed, BuildType.BACKPORT)
+
+
+def test_folded_versions_are_valid_pep_440_and_sort_correctly():
+    package = Package("demo", "1.0+upstream.1")
+    for kind, computed in [
+        (BuildType.BACKPORT, "1.0+upstream.1.rhlw.1"),
+        (BuildType.NOVEL, "1.0+upstream.1.rhlw.1.n.2"),
+    ]:
+        assert version_counts(package, computed, kind) == (
+            (1, 0) if kind == BuildType.BACKPORT else (1, 2)
+        )
+        # The joined form is valid PEP 440; the double-plus form is not.
+        Version(computed)
+        with pytest.raises(Exception):
+            Version("1.0+upstream.1+rhlw.1")
+    # Base upstream < remediated build < next upstream patch.
+    assert Version("1.0") < Version("1.0+upstream.1.rhlw.1")
+    assert Version("1.0+upstream.1.rhlw.1") < Version("1.1")
+    # Novel layers still sort on top of the backport build.
+    assert Version("1.0+upstream.1.rhlw.1") < Version("1.0+upstream.1.rhlw.1.n.2")
 
 
 def test_missing_baseline_fails(git_repo):

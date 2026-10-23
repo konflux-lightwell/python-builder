@@ -20,7 +20,7 @@ def package_config():
 
 
 @pytest.fixture
-def git_repo(tmp_path):
+def git_repo(request, tmp_path):
     root = tmp_path / "repo"
     root.mkdir()
     subprocess.run(["git", "init", "-q", str(root)], check=True)
@@ -30,9 +30,10 @@ def git_repo(tmp_path):
         ("commit.gpgsign", "false"),
     ):
         subprocess.run(["git", "-C", str(root), "config", key, value], check=True)
+    upstream_version = getattr(request, "param", "1.0")
     source = root / "source"
     source.mkdir()
-    (source / "PKG-INFO").write_text("Name: demo\nVersion: 1.0\n")
+    (source / "PKG-INFO").write_text(f"Name: demo\nVersion: {upstream_version}\n")
 
     def git(*args):
         return subprocess.run(
@@ -41,7 +42,7 @@ def git_repo(tmp_path):
 
     git("add", ".")
     git("commit", "-qm", "ingest")
-    git("tag", "demo/1.0")
+    git("tag", f"demo/{upstream_version}")
     return root, git
 
 
