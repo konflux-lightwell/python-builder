@@ -38,7 +38,13 @@ fi
 # Note: OpenBLAS build requires system GCC
 # USE_OPENMP=0 uses pthreads instead of OpenMP (matches upstream numpy/scipy,
 # avoids fork()/multiprocessing hazards and FP reduction divergence)
-make -j"$(nproc)" \
+# Parallelism is capped by available cgroup memory (not just nproc) -- this
+# build also compiles the full BLAS/LAPACK Fortran reference test suite, and
+# nproc reports the node's core count rather than the container's actual
+# memory allocation, which was OOM-killing the build under a tight memory
+# limit (LWLP-3636).
+OPENBLAS_MAKE_JOBS=$(get_memory_safe_jobs 1536)
+make -j"${OPENBLAS_MAKE_JOBS}" \
     PREFIX="${PREFIX}" \
     DYNAMIC_ARCH=1 \
     USE_OPENMP=0 \

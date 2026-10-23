@@ -55,6 +55,38 @@ function do_standard_install {
 	make install > /dev/null
 }
 
+function get_memory_safe_jobs {
+	# Caps parallel make jobs to what the container's cgroup memory limit can
+	# sustain. nproc reports the node's total core count, not the pod's actual
+	# CPU/memory allocation, so "make -j$(nproc)" can spawn far more parallel
+	# compiler jobs than a tight memory limit supports -- particularly for
+	# memory-heavy compiles (e.g. OpenBLAS's Fortran LAPACK test suite), which
+	# get OOM-killed by the cgroup partway through.
+	local mb_per_job=$1
+	check_var "${mb_per_job}"
+	local jobs
+	jobs=$(nproc)
+
+	local mem_limit_bytes=""
+	if [ -f /sys/fs/cgroup/memory.max ]; then
+		mem_limit_bytes=$(cat /sys/fs/cgroup/memory.max)
+	elif [ -f /sys/fs/cgroup/memory/memory.limit_in_bytes ]; then
+		mem_limit_bytes=$(cat /sys/fs/cgroup/memory/memory.limit_in_bytes)
+	fi
+
+	if [ -n "${mem_limit_bytes}" ] && [ "${mem_limit_bytes}" != "max" ]; then
+		local mem_jobs=$(( mem_limit_bytes / (mb_per_job * 1024 * 1024) ))
+		if [ "${mem_jobs}" -lt 1 ]; then
+			mem_jobs=1
+		fi
+		if [ "${mem_jobs}" -lt "${jobs}" ]; then
+			jobs="${mem_jobs}"
+		fi
+	fi
+
+	echo "${jobs}"
+}
+
 function strip_ {
 	# Strip what we can -- and ignore errors, because this just attempts to strip
 	# *everything*, including non-ELF files:
