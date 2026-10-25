@@ -160,7 +160,7 @@ setuptools-scm==10.3.4 \
     #   pluggy
     #   setuptools-rust
     #   tqdm
-setuptools-scm==9.2.2 \
+setuptools-scm==10.3.4 \
     --hash=sha256:1c674ab4665686a0887d7e24c03ab25f24201c213e82ea689d2f3e169ef7ef57 \
     --hash=sha256:30e8f84d2ab1ba7cb0e653429b179395d0c33775d54807fc5f1dd6671801aef7
     # via
