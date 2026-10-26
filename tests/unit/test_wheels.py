@@ -93,6 +93,34 @@ def test_vendored_metadata_is_preserved_and_hashed(tmp_path, make_wheel, version
                 assert int(size) == len(data)
 
 
+def test_verify_primary_wheels_accepts_canonicalized_local_segment_spelling(tmp_path, make_wheel):
+    # A non-canonically spelled local segment stays valid but is not the string
+    # a build backend emits: setuptools canonicalizes METADATA versions, so the
+    # header and SBOM carry the canonical spelling while the computed version
+    # keeps the operator-supplied spelling. Verification must compare under PEP
+    # 440 normalization, like the filename check.
+    computed = "1.0+Upstream_1.rhlw.2"
+    canonical = "1.0+upstream.1.rhlw.2"
+    wheel = make_wheel(
+        tmp_path, version=computed, sbom_version=canonical, metadata_version=canonical, redhat=True
+    )
+    assert verify_primary_wheels(tmp_path, Package("demo", "1.0+Upstream_1"), computed) == [wheel]
+
+
+@pytest.mark.parametrize(
+    "metadata_version,sbom_version",
+    [("1.0+upstream.1.rhlw.9", "1.0+upstream.1.rhlw.2"), ("not-a-version", "1.0+rhlw.2")],
+)
+def test_verify_primary_wheels_rejects_wrong_or_invalid_versions(
+    tmp_path, make_wheel, metadata_version, sbom_version
+):
+    make_wheel(
+        tmp_path, version="1.0+rhlw.2", sbom_version=sbom_version, metadata_version=metadata_version
+    )
+    with pytest.raises(TaskError):
+        verify_primary_wheels(tmp_path, Package("demo", "1.0"), "1.0+rhlw.2")
+
+
 @pytest.mark.parametrize("extra", [False, True])
 def test_missing_or_ambiguous_root_metadata_fails_without_modifying_wheel(tmp_path, extra):
     wheel = tmp_path / "demo-1.0-py3-none-any.whl"
