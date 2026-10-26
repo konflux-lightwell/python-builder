@@ -16,7 +16,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from packaging.utils import canonicalize_name, parse_wheel_filename
-from packaging.version import Version
+from packaging.version import InvalidVersion, Version
 
 from lightwell_python.runtime import Package, TaskError, read_json, write_json
 
@@ -206,6 +206,20 @@ def patch_wheel(path: Path, libraries: dict[str, list[str]] | None = None) -> No
         target.replace(path)
 
 
+def _version_matches(candidate: str, computed: str) -> bool:
+    """Compare *candidate* to *computed* under PEP 440 normalization.
+
+    A local version segment can be spelled non-canonically (case, underscores
+    vs dots) while remaining valid, and build backends canonicalize the
+    metadata they emit, so raw string comparison would spuriously fail.
+    Invalid or missing candidates simply do not match.
+    """
+    try:
+        return Version(candidate) == Version(computed)
+    except InvalidVersion:
+        return False
+
+
 def verify_primary_wheels(artifact: Path, package: Package, computed: str) -> list[Path]:
     """Require the primary wheel's filename and embedded versions to agree.
 
@@ -244,7 +258,7 @@ def verify_primary_wheels(artifact: Path, package: Package, computed: str) -> li
                 )
             headers = BytesParser().parsebytes(wheel.read(metadata))
             if (
-                headers.get("Version") != computed
+                not _version_matches(headers.get("Version", ""), computed)
                 or canonicalize_name(headers.get("Name", "")) != package.name
             ):
                 raise TaskError(
@@ -266,7 +280,7 @@ def verify_primary_wheels(artifact: Path, package: Package, computed: str) -> li
                     f"Primary wheel SBOM package identity mismatch in {path.name} ({root}): "
                     f"expected {package.name!r}, found {primary[0].get('name')!r}"
                 )
-            if primary[0].get("versionInfo") != computed:
+            if not _version_matches(primary[0].get("versionInfo", ""), computed):
                 raise TaskError(
                     f"Primary wheel SBOM version mismatch in {path.name}: expected {computed!r}, "
                     f"found {primary[0].get('versionInfo')!r} in {root}"

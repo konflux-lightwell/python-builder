@@ -104,6 +104,7 @@ def make_wheel():
         *,
         sbom_version=None,
         sbom=None,
+        metadata_version=None,
         name="demo",
         redhat=False,
         native=False,
@@ -132,7 +133,8 @@ def make_wheel():
                 "documentDescribes": ["SPDXRef-wheel"],
             }
         with zipfile.ZipFile(wheel, "w") as archive:
-            archive.writestr(f"{dist}/METADATA", f"Name: {name}\nVersion: {version}\n")
+            metadata_header = metadata_version or version
+            archive.writestr(f"{dist}/METADATA", f"Name: {name}\nVersion: {metadata_header}\n")
             archive.writestr(
                 f"{dist}/sboms/{'redhat' if redhat else 'fromager'}.spdx.json", json.dumps(sbom)
             )
