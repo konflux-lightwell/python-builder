@@ -62,6 +62,18 @@ class BuildType(StrEnum):
     NOVEL = "Novel"
     VALIDATED = "Validated"
 
+    @property
+    def distribution_target(self) -> str:
+        """dev.lightwell.distribution-target annotation value for this build type.
+
+        Backport and Novel both ship to the "remediated" repo/stream; the
+        vuln-class (CVE vs LW-) distinction is derived separately from the
+        vuln-id prefix, not from this annotation.
+        """
+        if self is BuildType.VALIDATED:
+            return "validated"
+        return "remediated"
+
 
 @dataclass(frozen=True)
 class Package:

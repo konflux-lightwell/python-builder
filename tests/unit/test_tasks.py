@@ -190,6 +190,45 @@ def test_wheels_complete_task(tmp_path, wheel_input, make_wheel, caplog):
     assert "Build manifest ready:" in caplog.text
 
 
+@pytest.mark.parametrize("build_type", [BuildType.BACKPORT, BuildType.NOVEL])
+def test_wheels_distribution_target_annotation(tmp_path, wheel_input, make_wheel, build_type):
+    """Backport and Novel builds both publish under the remediated distribution target.
+
+    registry-lightwell-python-remediated-stage's lightwell_allowed_distribution_targets
+    policy only allows "remediated" (or "validated"), never the literal build-type name.
+    """
+    work = tmp_path / "task"
+    work.mkdir()
+    registry = FakeRegistry()
+    wheels.run(
+        workdir=work,
+        results=tmp_path / "results",
+        package=Package("demo", "1.0"),
+        computed="1.0+rhlw.1",
+        build_type=build_type,
+        sdists_dir=wheel_input,
+        image="localhost:5000/org/repo:latest",
+        manifest_output=tmp_path / "manifest-output.json",
+        registry=registry,
+        runner=wheel_builder(make_wheel),
+    )
+    (_, _, _, _, annotations, _) = next(call for call in registry.calls if call[0] == "push")
+    assert annotations["dev.lightwell.distribution-target"] == "remediated"
+
+
+@pytest.mark.parametrize(
+    "build_type,expected",
+    [
+        (BuildType.BACKPORT, "remediated"),
+        (BuildType.NOVEL, "remediated"),
+        (BuildType.VALIDATED, "validated"),
+    ],
+)
+def test_build_type_distribution_target(build_type, expected):
+    """BuildType.distribution_target collapses Backport/Novel into "remediated"."""
+    assert build_type.distribution_target == expected
+
+
 def test_wheels_do_not_publish_unauthorized_build(tmp_path, wheel_input, make_wheel):
     work = tmp_path / "task"
     work.mkdir()

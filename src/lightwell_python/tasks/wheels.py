@@ -161,7 +161,7 @@ def run(
         "dev.lightwell.version": computed,
         "dev.lightwell.upstream-version": package.version,
         "dev.lightwell.pipeline": "python-build",
-        "dev.lightwell.distribution-target": build_type.value.lower(),
+        "dev.lightwell.distribution-target": build_type.distribution_target,
     }
     if image_expires:
         annotations["quay.expires-after"] = image_expires
