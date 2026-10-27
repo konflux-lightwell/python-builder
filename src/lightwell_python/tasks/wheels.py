@@ -26,6 +26,7 @@ from lightwell_python.versioning import version_counts
 from lightwell_python.wheel_metadata import (
     annotate_ai_attribution,
     extract_sbom,
+    validate_ai_models,
     verify_primary_wheels,
 )
 
@@ -83,6 +84,7 @@ def run(
 
     Raises:
         TaskError: Configuration, provenance, metadata, tools, or publication fail.
+            Unsafe ai_models values fail before the build starts.
             Uploads are not transactional: a failed SBOM attachment may leave the
             image uploaded, but no manifest handoff or success results are emitted.
     """
@@ -91,6 +93,8 @@ def run(
     version_counts(package, computed, build_type)
     if build_type == BuildType.VALIDATED and wheel_server:
         raise TaskError("Validated builds cannot use a prebuilt wheel server")
+    if ai_assisted:
+        validate_ai_models(ai_models)
 
     LOG.info(
         "Building wheels for %s; computed version: %s; build type: %s; wheel cache: %s",

@@ -66,7 +66,9 @@ The ingestion tag is `<package>/<version>` and the baseline tag is
   on the outer wheel are rejected.
 - `AI_ASSISTED` accepts only `true` or `false` (case-insensitive, surrounding spaces
   ignored; empty means false). Other values fail the wheel task instead of being
-  treated as false.
+  treated as false. With `AI_ASSISTED=true`, `AI_MODELS` must be empty or
+  comma-separated IDs using only letters, digits, and `. _ : / @ + -`; other values
+  fail the task before the build starts, so they cannot add fields to the annotation.
 - Image digests come from the manifest ORAS exports at push time. Registry retries
   are bounded; build commands are not retried. Credentials remain in private
   temporary files and never enter command arguments or logs.

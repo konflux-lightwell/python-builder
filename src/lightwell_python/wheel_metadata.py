@@ -18,7 +18,10 @@ from urllib.parse import quote
 from packaging.utils import canonicalize_name, parse_wheel_filename
 from packaging.version import Version
 
-from lightwell_python.runtime import Package, TaskError
+from lightwell_python.runtime import Package, TaskError, read_json, write_json
+
+AI_MODEL_ID = r"[A-Za-z0-9._:/@+-]+"
+AI_MODELS_PATTERN = re.compile(rf"(?:{AI_MODEL_ID}(?:,{AI_MODEL_ID})*)?")
 
 
 def system_libraries(output: str) -> dict[str, list[str]]:
@@ -263,25 +266,50 @@ def extract_sbom(wheel: Path, target: Path) -> None:
         target.write_bytes(archive.read(member))
 
 
+def validate_ai_models(models: str) -> None:
+    """Reject AI model lists that could change the structured attribution comment.
+
+    The comment uses ``key=value; key=value`` fields, so a model value with ``;``,
+    ``=``, or spaces could add or override a field (for example a forged
+    ``lightwell:aiSource``). Only comma-separated IDs from a safe character set
+    are allowed.
+
+    Args:
+        models: Comma-separated AI model IDs, or an empty string for no models.
+
+    Raises:
+        TaskError: The value is not empty and is not a list of safe model IDs.
+    """
+    if not AI_MODELS_PATTERN.fullmatch(models):
+        raise TaskError(
+            "AI_MODELS must be comma-separated model IDs using only "
+            "letters, digits, and . _ : / @ + -"
+        )
+
+
 def annotate_ai_attribution(sbom: Path, models: str, now: datetime | None = None) -> None:
     """Append a document-level AI attribution annotation to an extracted SPDX 2.3 SBOM.
 
     The annotation is appended after any existing annotations, and the list is
-    created when missing. The file is rewritten in place with two-space JSON
-    indentation and a trailing newline. Only call this on the extracted copy;
-    the embedded wheel SBOM must stay unchanged.
+    created when missing. The file is read with duplicate-key rejection and
+    rewritten in place with two-space JSON indentation and a trailing newline.
+    Only call this on the extracted copy; the embedded wheel SBOM must stay
+    unchanged.
 
     Args:
         sbom: Extracted SPDX JSON document to modify in place.
         models: Comma-separated AI model IDs, recorded exactly as given. An empty
             string records an empty model list.
-        now: Annotation timestamp. Defaults to the current UTC time.
+        now: Annotation timestamp, converted to UTC before formatting. A naive
+            value is treated as local time. Defaults to the current UTC time.
 
     Raises:
-        TaskError: The document top level is not a JSON object, or its
-            annotations value exists but is not a list.
+        TaskError: The models value is unsafe, the document has a duplicate key,
+            its top level is not a JSON object, or its annotations value exists
+            but is not a list.
     """
-    document = json.loads(sbom.read_bytes())
+    validate_ai_models(models)
+    document = read_json(sbom)
     if not isinstance(document, dict):
         raise TaskError("SBOM top level must be a JSON object")
     annotations = document.get("annotations", [])
@@ -293,7 +321,7 @@ def annotate_ai_attribution(sbom: Path, models: str, now: datetime | None = None
         {
             "annotationType": "OTHER",
             "annotator": "Organization: Red Hat Lightwell",
-            "annotationDate": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "annotationDate": now.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "comment": (
                 "lightwell:aiAssisted=true; "
                 f"lightwell:aiModels={models}; "
@@ -302,4 +330,4 @@ def annotate_ai_attribution(sbom: Path, models: str, now: datetime | None = None
         }
     )
     document["annotations"] = annotations
-    sbom.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+    write_json(sbom, document)

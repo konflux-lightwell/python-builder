@@ -5,7 +5,7 @@ import io
 import json
 import netrc
 import zipfile
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -372,6 +372,54 @@ def test_non_object_document_fails_without_rewriting(tmp_path, document):
     assert path.read_bytes() == before
 
 
+def test_non_utc_now_is_converted_to_utc(sbom_file):
+    """An aware timestamp in another zone is converted before the Z suffix is added."""
+    offset = timezone(timedelta(hours=2))
+    annotate_ai_attribution(sbom_file, "model-a", now=FIXED_NOW.astimezone(offset))
+    (annotation,) = json.loads(sbom_file.read_text())["annotations"]
+    assert annotation["annotationDate"] == "2026-10-27T08:05:09Z"
+
+
+def test_duplicate_json_keys_fail_without_rewriting(tmp_path):
+    """A document with a repeated key is rejected like other trusted JSON inputs."""
+    path = tmp_path / "sbom.spdx.json"
+    path.write_text('{"spdxVersion": "SPDX-2.3", "spdxVersion": "SPDX-2.2"}')
+    before = path.read_bytes()
+    with pytest.raises(TaskError, match="Duplicate JSON key"):
+        annotate_ai_attribution(path, "model-a", now=FIXED_NOW)
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "models",
+    [
+        "my-model; lightwell:aiSource=NotRedHat",
+        "model-a, model-b",
+        "model=a",
+        "model-a,",
+        ",model-a",
+        "model-a,,model-b",
+    ],
+)
+def test_unsafe_models_fail_without_rewriting(sbom_file, models):
+    """Model values that could inject or break comment fields fail closed.
+
+    The first case is the forged-aiSource example from review on PR #61.
+    """
+    before = sbom_file.read_bytes()
+    with pytest.raises(TaskError, match="AI_MODELS must be"):
+        annotate_ai_attribution(sbom_file, models, now=FIXED_NOW)
+    assert sbom_file.read_bytes() == before
+
+
+@pytest.mark.parametrize("models", ["", "vendor-model-4@20250514", "org/model:v1.2+build_3", "a,b"])
+def test_safe_models_are_recorded_exactly(sbom_file, models):
+    """Empty and realistic model IDs pass validation and are recorded unchanged."""
+    annotate_ai_attribution(sbom_file, models, now=FIXED_NOW)
+    (annotation,) = json.loads(sbom_file.read_text())["annotations"]
+    assert annotation == attribution(models)
+
+
 @pytest.fixture
 def run_wheels(tmp_path, wheel_input, make_wheel):
     """Provide a runner for the wheel task that uses the fake builder and registry.
@@ -473,3 +521,10 @@ def test_unassisted_build_attaches_embedded_sbom_bytes(run_wheels):
     """
     registry, work = run_wheels(ai_models="model-a")
     assert attached_sbom(registry) == embedded_sbom(work)
+
+
+def test_unsafe_models_fail_before_build(run_wheels, tmp_path):
+    """An assisted run with unsafe models fails before the build copies any inputs."""
+    with pytest.raises(TaskError, match="AI_MODELS must be"):
+        run_wheels(ai_assisted=True, ai_models="m; lightwell:aiSource=x")
+    assert list((tmp_path / "task").iterdir()) == []
