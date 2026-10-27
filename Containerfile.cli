@@ -22,6 +22,7 @@ RUN /src/venv/bin/uv sync --locked --no-dev --no-editable --python /src/venv/bin
 # Default target: native package builds, source preparation, and normalization.
 FROM ${BUILDER_IMAGE} AS python-builder
 USER 0
+RUN dnf -y update
 COPY --from=oras-bin /usr/bin/oras /usr/local/bin/oras
 COPY --from=oras-bin /usr/local/bin/select-oci-auth /usr/local/bin/select-oci-auth
 COPY --from=oras-bin /usr/local/bin/get-reference-base /usr/local/bin/get-reference-base

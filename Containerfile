@@ -640,7 +640,8 @@ ENV SSL_CERT_FILE=/opt/_internal/certs.pem
 WORKDIR /src
 # perl-IPC-Cmd is a build tool (not bundled in wheels)
 # cmake needed for CMake-based builds (libjpeg-turbo, libtiff, openblas)
-RUN dnf -y install \
+RUN dnf -y update && \
+    dnf -y install \
     --setopt install_weak_deps=0 \
     perl-IPC-Cmd \
     cmake \
