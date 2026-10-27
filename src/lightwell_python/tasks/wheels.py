@@ -23,7 +23,11 @@ from lightwell_python.runtime import (
     write_results,
 )
 from lightwell_python.versioning import version_counts
-from lightwell_python.wheel_metadata import extract_sbom, verify_primary_wheels
+from lightwell_python.wheel_metadata import (
+    annotate_ai_attribution,
+    extract_sbom,
+    verify_primary_wheels,
+)
 
 LOG = logging.getLogger(__name__)
 
@@ -45,12 +49,16 @@ def run(
     image_expires: str = "",
     overrides: Path = Path("/usr/local/share/fromager/overrides"),
     jobs: int | None = None,
+    ai_assisted: bool = False,
+    ai_models: str = "",
 ) -> None:
     """Build and publish wheels, then stage their manifest for trusted-artifact creation.
 
     A writable copy of the restored sdist tree supplies the exact config snapshot.
     Build summaries and primary wheel metadata are verified before publication.
     The manifest handoff becomes available only after image and SBOM upload succeed.
+    When AI-assisted, only the extracted SBOM copy receives an attribution
+    annotation before publication; the embedded wheel SBOM is left unchanged.
 
     Args:
         workdir: Existing, isolated scratch directory for build outputs.
@@ -69,6 +77,9 @@ def run(
         image_expires: Optional Quay expiration annotation for the final image.
         overrides: Builder-provided Fromager settings and patch directory.
         jobs: Optional Fromager parallelism limit.
+        ai_assisted: Add AI attribution to the attached SBOM when True.
+        ai_models: Comma-separated AI model IDs recorded with the attribution.
+            Used only when ai_assisted is True.
 
     Raises:
         TaskError: Configuration, provenance, metadata, tools, or publication fail.
@@ -132,6 +143,8 @@ def run(
         write_json(manifest_path, manifest)
         sbom = workdir / "sbom.spdx.json"
         extract_sbom(primary[0], sbom)
+        if ai_assisted:
+            annotate_ai_attribution(sbom, ai_models)
         LOG.info(
             "Verified %d primary wheels; manifest: %d produced, %d cached packages",
             len(primary),

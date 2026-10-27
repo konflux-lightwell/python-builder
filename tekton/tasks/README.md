@@ -24,6 +24,9 @@ maintained in fath-cuan's `tekton/task/attach-build-index`.
   local CLI runs can override it with `--auth-file`.
 - Wheels accept the optional `PULP_SECRET_NAME` mount and `WHEEL_SERVER_URL`.
   Leave the wheel server empty for Validated builds.
+- Wheels accept `AI_ASSISTED` (`true` or `false`, default `false`) and `AI_MODELS`
+  (comma-separated model IDs). When `AI_ASSISTED` is `true`, the attached SBOM gets
+  an AI attribution annotation. Other `AI_ASSISTED` values fail the task.
 - CA configuration uses `caTrustConfigMapName`/`caTrustConfigMapKey`;
   trusted-artifact storage/expiry uses `ociStorage`/`ociArtifactExpiresAfter`.
 

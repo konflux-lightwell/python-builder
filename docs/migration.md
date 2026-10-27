@@ -47,6 +47,8 @@ The ingestion tag is `<package>/<version>` and the baseline tag is
   with upstream and computed versions. Fromager runs bootstrap and build-sequence.
 - Native x86_64 wheels undergo auditwheel repair; SPDX SBOMs gain system dependencies
   and wheel filenames. The published artifact includes the dependency closure.
+- With `AI_ASSISTED=true`, the attached SBOM copy gets one document-level SPDX 2.3
+  annotation that lists `AI_MODELS`. Embedded wheel SBOMs are never modified.
 - Sdist normalization preserves acquired origin evidence and records input/output
   hashes in `sdist-transformation.json`.
 
@@ -62,6 +64,9 @@ The ingestion tag is `<package>/<version>` and the baseline tag is
 - Wheel RECORD is regenerated as CSV with hashes. Only the root `.dist-info` is
   rewritten; vendored metadata remains intact. Duplicate members and signatures
   on the outer wheel are rejected.
+- `AI_ASSISTED` accepts only `true` or `false` (case-insensitive, surrounding spaces
+  ignored; empty means false). Other values fail the wheel task instead of being
+  treated as false.
 - Image digests come from the manifest ORAS exports at push time. Registry retries
   are bounded; build commands are not retried. Credentials remain in private
   temporary files and never enter command arguments or logs.

@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import pytest
 
 from lightwell_python.runtime import (
@@ -13,7 +11,7 @@ from lightwell_python.runtime import (
 )
 from lightwell_python.tasks import sdist, source, wheels
 
-from .conftest import FakeRegistry, FakeRunner
+from .conftest import FakeRegistry, FakeRunner, wheel_builder
 
 
 @pytest.fixture
@@ -91,16 +89,6 @@ def test_config_clone_credentials_not_in_arguments(tmp_path):
         )
 
 
-@pytest.fixture
-def sdist_input(tmp_path):
-    path = tmp_path / "input"
-    (path / "downloads").mkdir(parents=True)
-    (path / "downloads/demo-1.0.tar.gz").write_bytes(b"acquired")
-    (path / "source-origin.json").write_text('{"opaque":true}')
-    (path / "evidence.bin").write_bytes(b"opaque evidence\x00")
-    return path
-
-
 def test_normalize_preserves_evidence_and_binds_digests(tmp_path, sdist_input, caplog):
     caplog.set_level("INFO")
     work = tmp_path / "task"
@@ -159,36 +147,6 @@ def test_normalize_rejects_stale_output(tmp_path, sdist_input):
     assert not any(call[0] == "push" for call in registry.calls)
     assert not (tmp_path / "results").exists()
     assert not (tmp_path / "manifest-output.json").exists()
-
-
-@pytest.fixture
-def wheel_input(sdist_input, package_config):
-    write_json(sdist_input / "build-configs/packages/demo.json", package_config)
-    write_json(sdist_input / "backend-env.json", {})
-    (sdist_input / ".commit").write_text("abcdef1")
-    return sdist_input
-
-
-def wheel_builder(make_wheel, *, unauthorized=False):
-    def build(args, kwargs):
-        if args[0] == "fromager" and "build-sequence" in args:
-            output = kwargs["cwd"]
-            make_wheel(output / "wheels-repo/downloads")
-            write_json(
-                output / "work-dir/build-sequence-summary.json",
-                [
-                    {
-                        "name": "rogue" if unauthorized else "demo",
-                        "version": "1.0",
-                        "prebuilt": False,
-                    }
-                ],
-            )
-            builds = Path(kwargs["env"]["FROMAGER_SDISTS_REPO"]) / "builds"
-            builds.mkdir()
-            (builds / "demo-1.0.tar.gz").write_bytes(b"built")
-
-    return FakeRunner(build)
 
 
 def test_wheels_complete_task(tmp_path, wheel_input, make_wheel, caplog):

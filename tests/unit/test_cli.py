@@ -229,3 +229,86 @@ def test_execute_invokes_the_argparse_target(tmp_path, monkeypatch):
     assert args.sdists_dir == Path("input")
     assert context["package"].name == "demo"
     assert context["workdir"].parent == tmp_path
+
+
+WHEEL_REQUIRED_ARGS = [
+    "--package",
+    "demo",
+    "--version",
+    "1.0",
+    "--sdists-dir",
+    "sdists",
+    "--image",
+    "registry/repo",
+    "--build-type",
+    "Backport",
+    "--computed-version",
+    "1.0+rhlw.1",
+    "--manifest-output",
+    "manifest.json",
+]
+
+
+@pytest.fixture
+def wheel_calls(tmp_path, monkeypatch):
+    """Replace the wheel task with a recorder and clear AI inputs from the environment.
+
+    Args:
+        tmp_path: Per-test temporary directory used for workdir and results.
+        monkeypatch: Pytest fixture that replaces the task and controls the environment.
+
+    Returns:
+        List that receives the keyword arguments of each wheels.run call.
+    """
+    calls = []
+    monkeypatch.setattr(cli.wheels, "run", lambda **kwargs: calls.append(kwargs))
+    monkeypatch.setenv("WORKDIR", str(tmp_path / "work"))
+    monkeypatch.setenv("RESULTS_DIR", str(tmp_path / "results"))
+    monkeypatch.delenv("AI_ASSISTED", raising=False)
+    monkeypatch.delenv("AI_MODELS", raising=False)
+    return calls
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [("true", True), ("TRUE", True), (" true ", True), ("false", False), ("", False)],
+)
+def test_ai_assisted_accepts_strict_boolean_spellings(wheel_calls, value, expected):
+    """Accepted spellings are trimmed and case-folded before becoming a boolean."""
+    assert cli.execute("build-wheels", [*WHEEL_REQUIRED_ARGS, f"--ai-assisted={value}"]) == 0
+    assert wheel_calls[0]["ai_assisted"] is expected
+
+
+def test_ai_attribution_defaults_are_off(wheel_calls):
+    """Without AI inputs, the build runs unannotated with an empty model list."""
+    assert cli.execute("build-wheels", WHEEL_REQUIRED_ARGS) == 0
+    assert wheel_calls[0]["ai_assisted"] is False
+    assert wheel_calls[0]["ai_models"] == ""
+
+
+def test_ai_attribution_inputs_fall_back_to_environment(wheel_calls, monkeypatch):
+    """AI_ASSISTED and AI_MODELS environment values feed the matching task inputs."""
+    monkeypatch.setenv("AI_ASSISTED", "True")
+    monkeypatch.setenv("AI_MODELS", "model-a,model-b")
+    assert cli.execute("build-wheels", WHEEL_REQUIRED_ARGS) == 0
+    assert wheel_calls[0]["ai_assisted"] is True
+    assert wheel_calls[0]["ai_models"] == "model-a,model-b"
+
+
+def test_explicit_ai_arguments_override_environment(wheel_calls, monkeypatch):
+    """Command-line AI options take precedence over the environment fallback."""
+    monkeypatch.setenv("AI_ASSISTED", "true")
+    monkeypatch.setenv("AI_MODELS", "environment-model")
+    args = [*WHEEL_REQUIRED_ARGS, "--ai-assisted=false", "--ai-models=cli-model"]
+    assert cli.execute("build-wheels", args) == 0
+    assert wheel_calls[0]["ai_assisted"] is False
+    assert wheel_calls[0]["ai_models"] == "cli-model"
+
+
+@pytest.mark.parametrize("value", ["yes", "1", "truee"])
+def test_invalid_ai_assisted_is_rejected_before_publication(wheel_calls, caplog, value):
+    """Unknown AI_ASSISTED values fail the task instead of silently disabling attribution."""
+    caplog.set_level("INFO")
+    assert cli.execute("build-wheels", [*WHEEL_REQUIRED_ARGS, f"--ai-assisted={value}"]) == 1
+    assert wheel_calls == []
+    assert f"ai-assisted must be true or false, got '{value}'" in caplog.text

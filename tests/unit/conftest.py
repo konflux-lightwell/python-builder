@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from lightwell_python.runtime import Runner
+from lightwell_python.runtime import Runner, write_json
 
 
 @pytest.fixture
@@ -17,6 +17,56 @@ def package_config():
         "lightwell_builds_repo": "pypi.org-demo",
         "versions": ["1.0"],
     }
+
+
+@pytest.fixture
+def sdist_input(tmp_path):
+    path = tmp_path / "input"
+    (path / "downloads").mkdir(parents=True)
+    (path / "downloads/demo-1.0.tar.gz").write_bytes(b"acquired")
+    (path / "source-origin.json").write_text('{"opaque":true}')
+    (path / "evidence.bin").write_bytes(b"opaque evidence\x00")
+    return path
+
+
+@pytest.fixture
+def wheel_input(sdist_input, package_config):
+    write_json(sdist_input / "build-configs/packages/demo.json", package_config)
+    write_json(sdist_input / "backend-env.json", {})
+    (sdist_input / ".commit").write_text("abcdef1")
+    return sdist_input
+
+
+def wheel_builder(make_wheel, *, unauthorized=False):
+    """Return a fake runner that produces one primary wheel and its build summary.
+
+    Args:
+        make_wheel: Fixture that writes a wheel into a directory and returns its path.
+        unauthorized: When True, the build summary names a package outside the allowlist.
+
+    Returns:
+        A FakeRunner whose Fromager build-sequence call writes the wheel and summary.
+    """
+
+    def build(args, kwargs):
+        if args[0] == "fromager" and "build-sequence" in args:
+            output = kwargs["cwd"]
+            make_wheel(output / "wheels-repo/downloads")
+            write_json(
+                output / "work-dir/build-sequence-summary.json",
+                [
+                    {
+                        "name": "rogue" if unauthorized else "demo",
+                        "version": "1.0",
+                        "prebuilt": False,
+                    }
+                ],
+            )
+            builds = Path(kwargs["env"]["FROMAGER_SDISTS_REPO"]) / "builds"
+            builds.mkdir()
+            (builds / "demo-1.0.tar.gz").write_bytes(b"built")
+
+    return FakeRunner(build)
 
 
 @pytest.fixture

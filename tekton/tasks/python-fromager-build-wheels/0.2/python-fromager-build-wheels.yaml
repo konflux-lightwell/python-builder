@@ -43,6 +43,14 @@ spec:
       description: Delete image tag after specified time. Empty means keep.
       type: string
       default: ''
+    - name: AI_ASSISTED
+      description: Set to true to add AI attribution to the attached SBOM.
+      type: string
+      default: 'false'
+    - name: AI_MODELS
+      description: Comma-separated AI model IDs, used when AI_ASSISTED is true.
+      type: string
+      default: ''
     - name: ociStorage
       description: The OCI repository to store the trusted artifact to.
       type: string
@@ -146,6 +154,8 @@ spec:
         - --image-expires-after=$(params.IMAGE_EXPIRES_AFTER)
         - --wheel-server-url=$(params.WHEEL_SERVER_URL)
         - --pulp-secret=/mnt/pulp-secret
+        - --ai-assisted=$(params.AI_ASSISTED)
+        - --ai-models=$(params.AI_MODELS)
       volumeMounts:
         - name: trusted-ca
           mountPath: /mnt/trusted-ca

@@ -5,6 +5,8 @@ import io
 import json
 import netrc
 import zipfile
+from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
@@ -16,7 +18,9 @@ from lightwell_python.build import (
 )
 from lightwell_python.manifest import build_manifest
 from lightwell_python.runtime import BuildType, Package, TaskError, write_json
+from lightwell_python.tasks import wheels
 from lightwell_python.wheel_metadata import (
+    annotate_ai_attribution,
     extract_sbom,
     patch_sbom,
     patch_wheel,
@@ -24,7 +28,9 @@ from lightwell_python.wheel_metadata import (
     verify_primary_wheels,
 )
 
-from .conftest import FakeRunner
+from .conftest import FakeRegistry, FakeRunner, wheel_builder
+
+FIXED_NOW = datetime(2026, 10, 27, 8, 5, 9, tzinfo=UTC)
 
 
 def test_wheel_record_matches_every_member(tmp_path, make_wheel):
@@ -259,3 +265,211 @@ def test_missing_build_summary_fails(tmp_path):
             Package("demo", "1.0"),
             {},
         )
+
+
+def attribution(models: str, date: str = "2026-10-27T08:05:09Z") -> dict:
+    """Build the attribution annotation expected for a model list.
+
+    Args:
+        models: Comma-separated model IDs recorded in the comment.
+        date: Expected annotationDate string.
+
+    Returns:
+        The SPDX 2.3 annotation dictionary.
+    """
+    return {
+        "annotationType": "OTHER",
+        "annotator": "Organization: Red Hat Lightwell",
+        "annotationDate": date,
+        "comment": (
+            f"lightwell:aiAssisted=true; lightwell:aiModels={models}; "
+            "lightwell:aiSource=Red Hat Lightwell"
+        ),
+    }
+
+
+@pytest.fixture
+def sbom_file(tmp_path):
+    """Provide a minimal SPDX 2.3 document on disk that has no annotations key.
+
+    Args:
+        tmp_path: Per-test temporary directory.
+
+    Returns:
+        Path to the written SPDX JSON file.
+    """
+    path = tmp_path / "sbom.spdx.json"
+    path.write_text(json.dumps({"spdxVersion": "SPDX-2.3", "packages": []}))
+    return path
+
+
+def test_annotation_is_created_when_missing(sbom_file):
+    """A document without annotations gets a new list and keeps the rest of its content.
+
+    The rewrite uses two-space indentation and a trailing newline.
+    """
+    annotate_ai_attribution(sbom_file, "model-a,model-b", now=FIXED_NOW)
+    expected = {
+        "spdxVersion": "SPDX-2.3",
+        "packages": [],
+        "annotations": [attribution("model-a,model-b")],
+    }
+    assert sbom_file.read_text() == json.dumps(expected, indent=2) + "\n"
+
+
+def test_annotation_is_appended_after_existing_annotations(tmp_path):
+    """Existing annotations keep their position and the attribution follows them."""
+    existing = {
+        "annotationType": "REVIEW",
+        "annotator": "Person: Jane Reviewer",
+        "annotationDate": "2026-01-01T00:00:00Z",
+        "comment": "reviewed",
+    }
+    path = tmp_path / "sbom.spdx.json"
+    path.write_text(json.dumps({"annotations": [existing]}))
+    annotate_ai_attribution(path, "model-a", now=FIXED_NOW)
+    assert json.loads(path.read_text())["annotations"] == [existing, attribution("model-a")]
+
+
+def test_fixed_now_sets_the_exact_utc_date(sbom_file):
+    """An injected timestamp is formatted as the exact UTC string with a Z suffix."""
+    annotate_ai_attribution(sbom_file, "model-a", now=FIXED_NOW)
+    (annotation,) = json.loads(sbom_file.read_text())["annotations"]
+    assert annotation["annotationDate"] == "2026-10-27T08:05:09Z"
+
+
+def test_default_timestamp_is_current_utc(sbom_file):
+    """Without an injected time, the annotation date falls inside the call's UTC window."""
+    before = datetime.now(UTC).replace(microsecond=0)
+    annotate_ai_attribution(sbom_file, "model-a")
+    after = datetime.now(UTC)
+    (annotation,) = json.loads(sbom_file.read_text())["annotations"]
+    stamp = datetime.strptime(annotation["annotationDate"], "%Y-%m-%dT%H:%M:%SZ").replace(
+        tzinfo=UTC
+    )
+    assert before <= stamp <= after
+
+
+@pytest.mark.parametrize("annotations", [{}, "text", None, 7])
+def test_non_list_annotations_fail_without_rewriting(tmp_path, annotations):
+    """A malformed annotations value fails closed and leaves the SBOM bytes unchanged."""
+    path = tmp_path / "sbom.spdx.json"
+    path.write_text(json.dumps({"annotations": annotations}))
+    before = path.read_bytes()
+    with pytest.raises(TaskError, match="annotations must be a list"):
+        annotate_ai_attribution(path, "model-a", now=FIXED_NOW)
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("document", [[], "text", None])
+def test_non_object_document_fails_without_rewriting(tmp_path, document):
+    """A top-level value that is not a JSON object fails closed and stays unchanged."""
+    path = tmp_path / "sbom.spdx.json"
+    path.write_text(json.dumps(document))
+    before = path.read_bytes()
+    with pytest.raises(TaskError, match="must be a JSON object"):
+        annotate_ai_attribution(path, "model-a", now=FIXED_NOW)
+    assert path.read_bytes() == before
+
+
+@pytest.fixture
+def run_wheels(tmp_path, wheel_input, make_wheel):
+    """Provide a runner for the wheel task that uses the fake builder and registry.
+
+    Args:
+        tmp_path: Per-test temporary directory.
+        wheel_input: Restored sdist and build-config tree.
+        make_wheel: Fixture that writes a primary wheel.
+
+    Returns:
+        A callable that accepts extra wheels.run keyword arguments, executes the task
+        once, and returns the recording registry and the task scratch directory.
+    """
+
+    def run(**options):
+        """Run the wheel task once with the given options.
+
+        Args:
+            **options: Extra keyword arguments forwarded to wheels.run.
+
+        Returns:
+            Tuple of the FakeRegistry and the task scratch directory.
+        """
+        work = tmp_path / "task"
+        work.mkdir()
+        registry = FakeRegistry()
+        wheels.run(
+            workdir=work,
+            results=tmp_path / "results",
+            package=Package("demo", "1.0"),
+            computed="1.0+rhlw.1",
+            build_type=BuildType.BACKPORT,
+            sdists_dir=wheel_input,
+            image="localhost:5000/org/repo:latest",
+            manifest_output=tmp_path / "manifest-output.json",
+            registry=registry,
+            runner=wheel_builder(make_wheel),
+            **options,
+        )
+        return registry, work
+
+    return run
+
+
+def attached_sbom(registry: FakeRegistry) -> bytes:
+    """Return the bytes of the SBOM file the registry was asked to attach.
+
+    Args:
+        registry: Fake registry that recorded the attach call.
+
+    Returns:
+        Raw bytes of the attached SBOM file.
+    """
+    (sbom,) = [call[2] for call in registry.calls if call[0] == "sbom"]
+    return Path(sbom).read_bytes()
+
+
+def embedded_sbom(work: Path) -> bytes:
+    """Return the redhat.spdx.json bytes stored inside the built primary wheel.
+
+    Args:
+        work: Task scratch directory containing the collected artifact.
+
+    Returns:
+        Raw bytes of the embedded SPDX document.
+    """
+    (wheel,) = (work / "artifact").glob("*.whl")
+    with zipfile.ZipFile(wheel) as archive:
+        return archive.read("demo-1.0+rhlw.1.dist-info/sboms/redhat.spdx.json")
+
+
+@pytest.mark.parametrize("models", ["model-a,model-b", ""])
+def test_ai_assisted_build_attaches_annotated_sbom(run_wheels, models):
+    """Assisted builds attach the SBOM with one AI annotation and no other changes.
+
+    The embedded SBOM has no annotations, so removing the new one from the attached
+    document must reproduce the embedded content. Empty models still record the flag.
+    """
+    registry, work = run_wheels(ai_assisted=True, ai_models=models)
+
+    attached = json.loads(attached_sbom(registry))
+    embedded = json.loads(embedded_sbom(work))
+    (annotation,) = attached.pop("annotations")
+    assert annotation["annotationType"] == "OTHER"
+    assert annotation["annotator"] == "Organization: Red Hat Lightwell"
+    assert annotation["comment"] == (
+        f"lightwell:aiAssisted=true; lightwell:aiModels={models}; "
+        "lightwell:aiSource=Red Hat Lightwell"
+    )
+    datetime.strptime(annotation["annotationDate"], "%Y-%m-%dT%H:%M:%SZ")
+    assert "annotations" not in embedded
+    assert attached == embedded
+
+
+def test_unassisted_build_attaches_embedded_sbom_bytes(run_wheels):
+    """Builds without AI assistance attach the embedded SBOM byte for byte.
+
+    Models supplied without the assistance flag must not add an annotation.
+    """
+    registry, work = run_wheels(ai_models="model-a")
+    assert attached_sbom(registry) == embedded_sbom(work)

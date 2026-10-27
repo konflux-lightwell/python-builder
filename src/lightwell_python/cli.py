@@ -107,6 +107,8 @@ def wheels_parser() -> argparse.ArgumentParser:
     _option(result, "pulp-secret", type=Path, default=Path("/mnt/pulp-secret"))
     _option(result, "overrides", type=Path, default=Path("/usr/local/share/fromager/overrides"))
     _option(result, "jobs", type=int)
+    _option(result, "ai-assisted", default="false")
+    _option(result, "ai-models", default="")
     return result
 
 
@@ -136,6 +138,26 @@ def _run_source(args: argparse.Namespace, context: TaskContext) -> None:
     )
 
 
+def _parse_ai_assisted(value: str) -> bool:
+    """Parse the strict AI-assistance switch used by CLI and Tekton inputs.
+
+    Args:
+        value: Raw option text. Surrounding whitespace and letter case are ignored.
+
+    Returns:
+        True for "true"; False for "false" or an empty value.
+
+    Raises:
+        TaskError: The value is neither true, false, nor empty. Unknown values are
+            rejected rather than treated as false, so attribution cannot be dropped
+            silently.
+    """
+    normalized = value.strip().lower()
+    if normalized not in {"true", "false", ""}:
+        raise TaskError(f"ai-assisted must be true or false, got {value!r}")
+    return normalized == "true"
+
+
 def _run_wheels(args: argparse.Namespace, context: TaskContext) -> None:
     """Pass parsed wheel build inputs and registry credentials to the task."""
     wheels.run(
@@ -151,6 +173,8 @@ def _run_wheels(args: argparse.Namespace, context: TaskContext) -> None:
         image_expires=args.image_expires,
         overrides=args.overrides,
         jobs=args.jobs,
+        ai_assisted=_parse_ai_assisted(args.ai_assisted),
+        ai_models=args.ai_models,
     )
 
 

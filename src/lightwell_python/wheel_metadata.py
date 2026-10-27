@@ -10,6 +10,7 @@ import json
 import re
 import tempfile
 import zipfile
+from datetime import UTC, datetime
 from email.parser import BytesParser
 from pathlib import Path
 from urllib.parse import quote
@@ -260,3 +261,45 @@ def extract_sbom(wheel: Path, target: Path) -> None:
         if archive.namelist().count(member) != 1:
             raise TaskError("Expected exactly one primary SBOM")
         target.write_bytes(archive.read(member))
+
+
+def annotate_ai_attribution(sbom: Path, models: str, now: datetime | None = None) -> None:
+    """Append a document-level AI attribution annotation to an extracted SPDX 2.3 SBOM.
+
+    The annotation is appended after any existing annotations, and the list is
+    created when missing. The file is rewritten in place with two-space JSON
+    indentation and a trailing newline. Only call this on the extracted copy;
+    the embedded wheel SBOM must stay unchanged.
+
+    Args:
+        sbom: Extracted SPDX JSON document to modify in place.
+        models: Comma-separated AI model IDs, recorded exactly as given. An empty
+            string records an empty model list.
+        now: Annotation timestamp. Defaults to the current UTC time.
+
+    Raises:
+        TaskError: The document top level is not a JSON object, or its
+            annotations value exists but is not a list.
+    """
+    document = json.loads(sbom.read_bytes())
+    if not isinstance(document, dict):
+        raise TaskError("SBOM top level must be a JSON object")
+    annotations = document.get("annotations", [])
+    if not isinstance(annotations, list):
+        raise TaskError("SBOM annotations must be a list")
+    if now is None:
+        now = datetime.now(UTC)
+    annotations.append(
+        {
+            "annotationType": "OTHER",
+            "annotator": "Organization: Red Hat Lightwell",
+            "annotationDate": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "comment": (
+                "lightwell:aiAssisted=true; "
+                f"lightwell:aiModels={models}; "
+                "lightwell:aiSource=Red Hat Lightwell"
+            ),
+        }
+    )
+    document["annotations"] = annotations
+    sbom.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
