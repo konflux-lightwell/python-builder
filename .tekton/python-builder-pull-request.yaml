@@ -15,7 +15,7 @@ metadata:
     appstudio.openshift.io/component: python-builder
     pipelines.appstudio.openshift.io/type: build
   name: python-builder-on-pull-request
-  namespace: lightwell-python-tenant
+  namespace: lightwell-catalog-tenant
 spec:
   params:
   - name: git-url
@@ -23,11 +23,11 @@ spec:
   - name: revision
     value: '{{revision}}'
   - name: output-image
-    value: quay.io/redhat-user-workloads/lightwell-python-tenant/python-builder/python-builder:on-pr-{{revision}}
+    value: quay.io/redhat-user-workloads/lightwell-catalog-tenant/python-builder/python-builder:on-pr-{{revision}}
   - name: image-expires-after
     value: 5d
   - name: dockerfile
-    value: Containerfile
+    value: Dockerfile
   pipelineSpec:
     description: |
       This pipeline is ideal for building container images from a Containerfile while maintaining trust after pipeline customization.
@@ -541,22 +541,8 @@ spec:
       optional: true
     - name: netrc
       optional: true
-  taskRunSpecs:
-  - pipelineTaskName: build-container
-    timeout: 3h
-    stepSpecs:
-    - name: build
-      computeResources:
-        requests:
-          cpu: '8'
-          memory: 12Gi
-        limits:
-          cpu: '8'
-          memory: 12Gi
   taskRunTemplate:
     serviceAccountName: build-pipeline-python-builder
-  timeouts:
-    pipeline: 3h30m0s
   workspaces:
   - name: git-auth
     secret:
