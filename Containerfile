@@ -1,5 +1,5 @@
 # default to latest supported policy, x86_64
-ARG BASEIMAGE=registry.access.redhat.com/ubi8/ubi@sha256:bd097b288df365aec7bad694c87036534ce94d1a4974c943f417f757f8eb2ac4
+ARG BASEIMAGE=registry.access.redhat.com/ubi8/ubi@sha256:f5aba2d17411c752f14b06f3b52e3002634e63d13996196b642d2144475454e2
 ARG POLICY=manylinux_2_28
 ARG PLATFORM=x86_64
 ARG DEVTOOLSET_ROOTPATH=/opt/rh/gcc-toolset-14/root
