@@ -66,14 +66,22 @@ class BuildType(StrEnum):
     def distribution_target(self) -> str:
         """dev.lightwell.distribution-target annotation value for this build type.
 
-        Backport and Novel both ship to the "remediated" repo/stream; the
-        vuln-class (CVE vs LW-) distinction is derived separately from the
-        vuln-id prefix, not from this annotation.
+        Backport ships to the "remediated" repo/stream, the only target
+        registry-lightwell-python-remediated-stage's
+        lightwell_allowed_distribution_targets policy currently permits.
+        Novel intentionally gets its own "novel" target, which that policy
+        does NOT yet allow: the novel-fix workflow isn't live, so any Novel
+        build should fail closed at Enterprise Contract release validation
+        rather than silently ship under the remediated target. Once the
+        policy is updated to recognize "novel", those builds will start
+        passing without a further code change here.
         """
         if self is BuildType.VALIDATED:
             return "validated"
-        if self in (BuildType.BACKPORT, BuildType.NOVEL):
+        if self is BuildType.BACKPORT:
             return "remediated"
+        if self is BuildType.NOVEL:
+            return "novel"
         raise ValueError(f"No distribution-target mapping for build type: {self!r}")
 
 

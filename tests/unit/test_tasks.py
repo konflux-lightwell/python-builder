@@ -190,12 +190,22 @@ def test_wheels_complete_task(tmp_path, wheel_input, make_wheel, caplog):
     assert "Build manifest ready:" in caplog.text
 
 
-@pytest.mark.parametrize("build_type", [BuildType.BACKPORT, BuildType.NOVEL])
-def test_wheels_distribution_target_annotation(tmp_path, wheel_input, make_wheel, build_type):
-    """Backport and Novel builds both publish under the remediated distribution target.
+@pytest.mark.parametrize(
+    "build_type,expected",
+    [
+        (BuildType.BACKPORT, "remediated"),
+        (BuildType.NOVEL, "novel"),
+    ],
+)
+def test_wheels_distribution_target_annotation(
+    tmp_path, wheel_input, make_wheel, build_type, expected
+):
+    """Backport publishes under remediated; Novel gets its own, not-yet-allowed target.
 
     registry-lightwell-python-remediated-stage's lightwell_allowed_distribution_targets
-    policy only allows "remediated" (or "validated"), never the literal build-type name.
+    policy only allows "remediated" (or "validated") today. Novel intentionally emits
+    "novel" instead of collapsing into "remediated", so it fails closed at Enterprise
+    Contract release validation until the policy is updated for the novel-fix workflow.
     """
     work = tmp_path / "task"
     work.mkdir()
@@ -213,19 +223,19 @@ def test_wheels_distribution_target_annotation(tmp_path, wheel_input, make_wheel
         runner=wheel_builder(make_wheel),
     )
     (_, _, _, _, annotations, _) = next(call for call in registry.calls if call[0] == "push")
-    assert annotations["dev.lightwell.distribution-target"] == "remediated"
+    assert annotations["dev.lightwell.distribution-target"] == expected
 
 
 @pytest.mark.parametrize(
     "build_type,expected",
     [
         (BuildType.BACKPORT, "remediated"),
-        (BuildType.NOVEL, "remediated"),
+        (BuildType.NOVEL, "novel"),
         (BuildType.VALIDATED, "validated"),
     ],
 )
 def test_build_type_distribution_target(build_type, expected):
-    """BuildType.distribution_target collapses Backport/Novel into "remediated"."""
+    """BuildType.distribution_target maps Backport->remediated, Novel->novel (separate)."""
     assert build_type.distribution_target == expected
 
 
