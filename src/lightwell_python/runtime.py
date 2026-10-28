@@ -72,7 +72,9 @@ class BuildType(StrEnum):
         """
         if self is BuildType.VALIDATED:
             return "validated"
-        return "remediated"
+        if self in (BuildType.BACKPORT, BuildType.NOVEL):
+            return "remediated"
+        raise ValueError(f"No distribution-target mapping for build type: {self!r}")
 
 
 @dataclass(frozen=True)
