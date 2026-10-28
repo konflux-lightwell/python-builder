@@ -61,6 +61,7 @@ class BuildType(StrEnum):
     BACKPORT = "Backport"
     NOVEL = "Novel"
     VALIDATED = "Validated"
+    SCRATCH = "Scratch"
 
 
 @dataclass(frozen=True)

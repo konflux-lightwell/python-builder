@@ -38,7 +38,8 @@ spec:
       description: "Build mode controlling version calculation. Accepted values:\n  Backport \
         \ \u2014 remediated build, B/N from commits since ingestion tag.\n  Novel     \u2014 remediated\
         \ build, B from ingestion\u2192baseline, N from baseline\u2192HEAD.\n  Validated \u2014\
-        \ upstream rebuild; no version suffix is applied."
+        \ upstream rebuild; no version suffix is applied.\n  Scratch   \u2014 reversioning check;\
+        \ fixed +rhlw.0 suffix with no lineage tags."
       type: string
     - name: BUILD_CONFIGS_REPO_URL
       description: Build-config registry URL, supplied by the orchestrator.

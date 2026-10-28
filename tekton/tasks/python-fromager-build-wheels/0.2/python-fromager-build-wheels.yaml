@@ -32,9 +32,10 @@ spec:
       type: string
     - name: BUILD_TYPE
       description: >-
-        Build mode: Backport, Novel, or Validated. Validated builds construct the full dependency
-        closure from source (no wheel server), so the allowed-artifacts provenance check applies
-        to remediated builds only.
+        Build mode: Backport, Novel, Validated, or Scratch. Validated builds construct the full
+        dependency closure from source (no wheel server), so the allowed-artifacts provenance check
+        applies to the remediated modes (Backport, Novel, Scratch). Scratch is a reversioning-check
+        build carrying a fixed +rhlw.0 version.
       type: string
     - name: IMAGE
       description: Reference of the OCI artifact to produce (wheels image).

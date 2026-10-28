@@ -35,6 +35,9 @@ def compute_version(
 
     Backport counts ingestion-to-HEAD commits. Novel splits the count at the
     baseline tag. Validated returns the upstream version without Git queries.
+    Scratch applies a fixed ``+rhlw.0`` suffix without Git queries, so a scratch
+    build can exercise and verify version rewriting even when the ingestion and
+    baseline lineage tags do not exist yet.
 
     Args:
         repo: Restored repository containing full history and ingestion/baseline tags.
@@ -53,6 +56,8 @@ def compute_version(
         return ComputedVersion(package.version)
     if "+" in package.version:
         raise TaskError("Remediation requires an upstream version without a local suffix")
+    if build_type == BuildType.SCRATCH:
+        return ComputedVersion(package.version + "+rhlw.0")
     base = ["git", "-c", f"safe.directory={repo}", "-C", str(repo)]
 
     def git(*args: str) -> str:
@@ -99,8 +104,8 @@ def version_counts(package: Package, computed: str, build_type: BuildType) -> tu
     if not match:
         raise TaskError("Computed version does not match the upstream remediation version scheme")
     b, n = int(match[1]), int(match[2] or 0)
-    if build_type == BuildType.BACKPORT and n:
-        raise TaskError("Backport builds cannot have a novel component")
+    if build_type in (BuildType.BACKPORT, BuildType.SCRATCH) and n:
+        raise TaskError("Backport and scratch builds cannot have a novel component")
     return b, n
 
 

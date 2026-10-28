@@ -36,6 +36,7 @@ while `IMAGE_DIGEST` identifies the published OCI manifest.
 | Backport | `upstream+rhlw.B`; B counts ingestion→HEAD | Source-build allowlist and optional wheel cache |
 | Novel | `upstream+rhlw.B.n.N`; B counts ingestion→baseline, N counts baseline→HEAD | Same as Backport |
 | Validated | Upstream version | Full dependency closure; wheel cache disabled |
+| Scratch | `upstream+rhlw.0`; fixed, no Git lineage queried | Same as Backport |
 
 The ingestion tag is `<package>/<version>` and the baseline tag is
 `baseline/<version>`. Omit `.n.N` when N=0; validate ancestry before counting.
@@ -59,6 +60,11 @@ The ingestion tag is `<package>/<version>` and the baseline tag is
   and ownership. Their bytes may differ from the original Bash implementation.
 - Metadata rewrites validate paths and matches before writing. Default TOML/INI
   edits target project/metadata sections only.
+- Scratch is a reversioning-check build mode with no orchestrator equivalent: it
+  skips all Git lineage queries and stamps a fixed `upstream+rhlw.0`, so a
+  build-config can be exercised without ingestion/baseline tags. Whether the
+  rewrite actually landed is confirmed by the usual primary-wheel version check,
+  not by this task.
 - Missing/invalid build summaries, ambiguous sdists, and mismatched primary wheel
   filename, METADATA, or SPDX versions fail the task. A primary SBOM is required.
 - Wheel RECORD is regenerated as CSV with hashes. Only the root `.dist-info` is

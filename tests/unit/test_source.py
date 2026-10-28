@@ -42,11 +42,20 @@ def test_unrelated_lineage_rejected(git_repo):
         (BuildType.BACKPORT, "1.0+rhlw.1.n.2"),
         (BuildType.NOVEL, "1.0+rhlw.1garbage"),
         (BuildType.VALIDATED, "1.0+rhlw.0"),
+        (BuildType.SCRATCH, "1.0+rhlw.1.n.2"),
     ],
 )
 def test_invalid_computed_versions(kind, computed):
     with pytest.raises(TaskError):
         version_counts(Package("demo", "1.0"), computed, kind)
+
+
+def test_scratch_version_skips_lineage(tmp_path):
+    # Scratch never queries Git, so a fixed +rhlw.0 version is produced even without
+    # the ingestion/baseline lineage tags that Backport and Novel require.
+    version = compute_version(tmp_path, Package("demo", "1.0"), BuildType.SCRATCH, Runner())
+    assert (version.full, version.b, version.n, version.commit) == ("1.0+rhlw.0", 0, 0, "")
+    assert version_counts(Package("demo", "1.0"), version.full, BuildType.SCRATCH) == (0, 0)
 
 
 def test_rewrite_authoritative_sections(tmp_path):

@@ -37,8 +37,9 @@
    documented in `docs/migration.md`: `+rhlw.{B}[.n.{N}]`. Backport counts
    ingestion→HEAD for B and uses N=0. Novel counts ingestion→baseline for B and
    baseline→HEAD for N, using `baseline/{version}`. Omit `.n.N` when N=0.
-   Validated uses the upstream version unchanged. Validate ancestry before
-   counting commits.
+   Validated uses the upstream version unchanged. Scratch is a reversioning-check
+   mode: it queries no Git lineage and stamps a fixed `+rhlw.0`. Validate ancestry
+   before counting commits.
 6. Registry results hash the manifest ORAS exports at push time. Never resolve a
    mutable tag to determine the digest of the just-published artifact.
 7. Treat restored inputs as read-only. Use `copy_input_tree` to copy into scratch
