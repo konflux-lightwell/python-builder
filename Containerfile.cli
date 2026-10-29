@@ -1,6 +1,6 @@
 ARG BUILDER_IMAGE=quay.io/light-factory/python-builder@sha256:a746f8964e7e549a57fa7164c3852b33e62e544d993af87d26a1a870dfa4a57a
 
-FROM quay.io/konflux-ci/oras:latest@sha256:1beeecce012c99794568f74265c065839f9703d28306a8430b667f639343a98b AS oras-bin
+FROM quay.io/konflux-ci/oras:latest@sha256:308df510e55d560fe60efc9133bd09f67a72fbeea54900f3d711f8e27fcc624f AS oras-bin
 FROM ghcr.io/sigstore/cosign/cosign:v3.1.4@sha256:0f06154836d2de34f887a5c273506d52ca43edaa1d9e53e6510fa78a48f69c2d AS cosign-bin
 
 # Install the package and locked runtime dependencies without development tools.
