@@ -34,6 +34,7 @@ REQUIRED_STRING_FIELDS = (
 OPTIONAL_TOP_LEVEL_FIELDS = (
     "version_configs",
     "allowed_artifacts",
+    "canonical_source",
 )
 TOP_LEVEL_FIELDS = REQUIRED_TOP_LEVEL_FIELDS + OPTIONAL_TOP_LEVEL_FIELDS
 VERSION_CONFIG_FIELDS = (
@@ -42,7 +43,15 @@ VERSION_CONFIG_FIELDS = (
     "allowed_artifacts",
     "env",
     "version_rewrite",
+    "canonical_source",
 )
+CANONICAL_SOURCE_TYPES = ("pypi-sdist", "git")
+CANONICAL_SOURCE_FIELDS = ("type", "upstream_url", "internal_url", "ref")
+CANONICAL_SOURCE_URL_FIELDS = ("upstream_url", "internal_url")
+
+# Same safe-ref charset balor-fianna's fetch_target_tree._validate_source_ref
+# already enforces at pipeline runtime: tags, branches, and commit SHAs.
+_GIT_REF_RE = re.compile(r"^[a-zA-Z0-9._/-]+$")
 TESTS_FIELDS = ("dependencies", "commands")
 VERSION_REWRITE_FIELDS = ("files",)
 REWRITE_FILE_FIELDS = ("path", "pattern", "replacement")
@@ -118,6 +127,8 @@ def _validate_top_level(config: dict, path: Path, errors: list[str]) -> None:
 
     if "allowed_artifacts" in config:
         _validate_allowed_artifacts(config["allowed_artifacts"], "allowed_artifacts", errors)
+    if "canonical_source" in config:
+        _validate_canonical_source(config["canonical_source"], "canonical_source", errors)
 
 
 def _validate_versions(config: dict, errors: list[str]) -> None:
@@ -310,6 +321,70 @@ def _validate_rewrite_file(entry, loc: str, errors: list[str]) -> None:
             _check_tokens_only(replacement, f"{loc}.replacement", errors)
 
 
+def _validate_canonical_source(cs, loc: str, errors: list[str]) -> None:
+    """Validate a 'canonical_source' object (LWLP-2111).
+
+    See CANONICAL_SOURCE_TYPES above for the type contract.
+    """
+    if not isinstance(cs, dict):
+        errors.append(f"{loc} must be an object, got {type(cs).__name__}")
+        return
+
+    for field in cs:
+        if field not in CANONICAL_SOURCE_FIELDS:
+            errors.append(f"{loc}: unknown field '{field}'")
+
+    if "type" not in cs:
+        errors.append(f"{loc}: missing required field 'type'")
+        return
+
+    source_type = cs["type"]
+    if source_type not in CANONICAL_SOURCE_TYPES:
+        errors.append(
+            f"{loc}.type: must be one of {list(CANONICAL_SOURCE_TYPES)}, got {source_type!r}"
+        )
+        return
+
+    if source_type == "pypi-sdist":
+        for field in (*CANONICAL_SOURCE_URL_FIELDS, "ref"):
+            if field in cs:
+                errors.append(f"{loc}.{field} is not allowed for type 'pypi-sdist'")
+        return
+
+    # type == "git"
+    if "upstream_url" not in cs:
+        errors.append(f"{loc}: missing required field 'upstream_url' for type 'git'")
+    else:
+        upstream_url = cs["upstream_url"]
+        if not isinstance(upstream_url, str) or not upstream_url.strip():
+            errors.append(f"{loc}.upstream_url must be a non-empty string")
+        elif not upstream_url.startswith("https://"):
+            errors.append(f"{loc}.upstream_url must start with 'https://': {upstream_url!r}")
+
+    if "internal_url" in cs:
+        internal_url = cs["internal_url"]
+        if not isinstance(internal_url, str) or not internal_url.strip():
+            errors.append(f"{loc}.internal_url must be a non-empty string")
+        elif not internal_url.startswith("https://"):
+            errors.append(f"{loc}.internal_url must start with 'https://': {internal_url!r}")
+
+    if "ref" not in cs:
+        errors.append(f"{loc}: missing required field 'ref' for type 'git'")
+    else:
+        ref = cs["ref"]
+        if not isinstance(ref, str) or not ref.strip():
+            errors.append(f"{loc}.ref must be a non-empty string")
+        elif ref.startswith("-"):
+            errors.append(f"{loc}.ref must not start with '-': {ref!r}")
+        elif ".." in ref:
+            errors.append(f"{loc}.ref must not contain '..': {ref!r}")
+        elif not _GIT_REF_RE.match(ref):
+            errors.append(
+                f"{loc}.ref contains invalid characters "
+                f"(allowed: alphanumeric, '.', '_', '-', '/'): {ref!r}"
+            )
+
+
 def _validate_version_rewrite(vr, loc: str, errors: list[str]) -> None:
     """Require a nonempty list of valid path/pattern/replacement rewrite rules."""
     if not isinstance(vr, dict):
@@ -360,6 +435,8 @@ def _validate_config_body(config, loc: str, errors: list[str]) -> None:
         _validate_env(config["env"], f"{loc}.env", errors)
     if "version_rewrite" in config:
         _validate_version_rewrite(config["version_rewrite"], f"{loc}.version_rewrite", errors)
+    if "canonical_source" in config:
+        _validate_canonical_source(config["canonical_source"], f"{loc}.canonical_source", errors)
 
 
 def _validate_version_configs(config: dict, errors: list[str]) -> None:
