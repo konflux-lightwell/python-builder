@@ -1,5 +1,7 @@
 """Git checkout retag-and-verify operations."""
 
+from __future__ import annotations
+
 from pathlib import Path
 
 from lightwell_python.runtime import Runner, TaskError
@@ -19,31 +21,35 @@ def retag(repo: Path, computed: str, runner: Runner) -> str:
     Raises:
         TaskError: Git operations fail or verification fails.
     """
+    base = ["git", "-c", f"safe.directory={repo}", "-C", str(repo)]
+
+    def git(*args: str) -> str:
+        """Run a read-only git query scoped to this repository."""
+        return runner.run([*base, *args], capture=True).strip()
+
+    def git_run(*args: str) -> None:
+        """Run a git mutation scoped to this repository."""
+        runner.run([*base, *args])
+
     # Get current tags at HEAD
-    tags_output = runner.run(["git", "-C", str(repo), "tag", "--points-at", "HEAD"], capture=True)
+    tags_output = git("tag", "--points-at", "HEAD")
     current_tags = [tag.strip() for tag in tags_output.split("\n") if tag.strip()]
 
     # Untag all current tags
     for tag in current_tags:
-        runner.run(["git", "-C", str(repo), "tag", "-d", tag])
+        git_run("tag", "-d", tag)
 
     # Apply new tag
     new_tag = f"v{computed}"
-    runner.run(["git", "-C", str(repo), "tag", new_tag])
+    git_run("tag", new_tag)
 
     # Verify the tag is exactly what we applied
-    verify_output = runner.run(
-        ["git", "-C", str(repo), "describe", "--tags", "--exact-match", "HEAD"], capture=True
-    )
-    verified_tag = verify_output.strip()
+    verified_tag = git("describe", "--tags", "--exact-match", "HEAD")
     if verified_tag != new_tag:
-        raise TaskError(
-            f"Tag verification failed: expected {new_tag}, got {verified_tag}"
-        )
+        raise TaskError(f"Tag verification failed: expected {new_tag}, got {verified_tag}")
 
     # Return HEAD SHA
-    head_sha = runner.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture=True)
-    return head_sha.strip()
+    return git("rev-parse", "HEAD")
 
 
 def verify_clean(repo: Path, rewritten: list[Path], runner: Runner) -> None:
@@ -57,10 +63,14 @@ def verify_clean(repo: Path, rewritten: list[Path], runner: Runner) -> None:
     Raises:
         TaskError: Actual dirty files don't match expected set exactly.
     """
+    base = ["git", "-c", f"safe.directory={repo}", "-C", str(repo)]
+
+    def git(*args: str) -> str:
+        """Run a read-only git query scoped to this repository."""
+        return runner.run([*base, *args], capture=True).rstrip("\n")
+
     # Get git status output
-    status_output = runner.run(
-        ["git", "-C", str(repo), "status", "--porcelain"], capture=True
-    )
+    status_output = git("status", "--porcelain")
 
     # Parse status output into a set of repo-relative paths
     dirty_files = set()
@@ -75,6 +85,4 @@ def verify_clean(repo: Path, rewritten: list[Path], runner: Runner) -> None:
 
     # Check if they match exactly
     if dirty_files != expected_dirty:
-        raise TaskError(
-            f"Git status unexpected: expected {expected_dirty}, got {dirty_files}"
-        )
+        raise TaskError(f"Git status unexpected: expected {expected_dirty}, got {dirty_files}")

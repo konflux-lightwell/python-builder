@@ -54,6 +54,7 @@ def test_verify_clean_fails_on_unexpected_dirty_file(git_repo):
     with pytest.raises(TaskError, match="unexpected"):
         verify_clean(repo, [repo / "source/PKG-INFO"], Runner())
 
+
 def test_verify_clean_fails_when_expected_file_not_actually_dirty(git_repo):
     repo, _ = git_repo
     with pytest.raises(TaskError):
