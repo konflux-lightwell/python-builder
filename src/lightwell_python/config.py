@@ -26,12 +26,14 @@ class BuildConfig:
         env: Backend environment templates containing supported runtime tokens.
         rewrites: Explicit path/pattern/replacement rules; empty means use defaults.
         allowed: Canonical names permitted to be built from source in remediation.
+        canonical_source: Source type and configuration for this package version.
     """
 
     settings: dict[str, Any]
     env: dict[str, str]
     rewrites: list[dict[str, str]]
     allowed: frozenset[str]
+    canonical_source: dict[str, Any]
 
     @classmethod
     def load(cls, path: Path, package: Package) -> BuildConfig:
@@ -69,6 +71,11 @@ class BuildConfig:
                 f"Expected one version rule for {package.requirement}; got {len(matches)}"
             )
         selected = matches[0] if matches else {}
+        canonical_source = (
+            selected.get("canonical_source")
+            or config.get("canonical_source")
+            or {"type": "pypi-sdist"}
+        )
         return cls(
             settings=selected.get("fromager_settings", {}),
             env=selected.get("env", {}),
@@ -76,6 +83,7 @@ class BuildConfig:
             allowed=frozenset(
                 selected.get("allowed_artifacts", config.get("allowed_artifacts", [package.name]))
             ),
+            canonical_source=canonical_source,
         )
 
     def environment(self, package: Package, computed: str) -> dict[str, str]:
