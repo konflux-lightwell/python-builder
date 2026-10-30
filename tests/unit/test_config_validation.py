@@ -581,3 +581,79 @@ def test_version_rewrite_file_replacement_malformed_token(tmp_path):
     config["version_configs"]["<12.3.0"]["version_rewrite"] = vr
     errors = run(tmp_path, config)
     assert has(errors, "malformed token syntax")
+
+
+# --- canonical_source -------------------------------------------------------
+
+
+def test_canonical_source_pypi_sdist_top_level_valid(tmp_path):
+    cfg = baseline()
+    cfg["canonical_source"] = {"type": "pypi-sdist"}
+    assert run(tmp_path, cfg) == []
+
+
+def test_canonical_source_git_valid(tmp_path):
+    cfg = baseline()
+    cfg["version_configs"][">=12.3.0"]["canonical_source"] = {
+        "type": "git",
+        "upstream_url": "https://github.com/python-pillow/Pillow",
+        "ref": "12.3.0",
+    }
+    assert run(tmp_path, cfg) == []
+
+
+def test_canonical_source_git_with_internal_url_valid(tmp_path):
+    cfg = baseline()
+    cfg["canonical_source"] = {
+        "type": "git",
+        "upstream_url": "https://github.com/python-pillow/Pillow",
+        "internal_url": "https://internal.example.test/mirror/pillow.git",
+        "ref": "12.3.0",
+    }
+    assert run(tmp_path, cfg) == []
+
+
+def test_canonical_source_git_missing_upstream_url(tmp_path):
+    cfg = baseline()
+    cfg["canonical_source"] = {"type": "git", "ref": "12.3.0"}
+    assert has(run(tmp_path, cfg), "missing required field 'upstream_url'")
+
+
+def test_canonical_source_git_missing_ref(tmp_path):
+    cfg = baseline()
+    cfg["canonical_source"] = {"type": "git", "upstream_url": "https://github.com/x/y"}
+    assert has(run(tmp_path, cfg), "missing required field 'ref'")
+
+
+def test_canonical_source_pypi_sdist_rejects_extra_fields(tmp_path):
+    cfg = baseline()
+    cfg["canonical_source"] = {"type": "pypi-sdist", "ref": "x"}
+    assert has(run(tmp_path, cfg), "is not allowed for type 'pypi-sdist'")
+
+
+def test_canonical_source_unknown_type(tmp_path):
+    cfg = baseline()
+    cfg["canonical_source"] = {"type": "svn"}
+    assert has(run(tmp_path, cfg), "must be one of")
+
+
+def test_canonical_source_non_https_upstream_url(tmp_path):
+    cfg = baseline()
+    cfg["canonical_source"] = {"type": "git", "upstream_url": "git://x/y", "ref": "1.0"}
+    assert has(run(tmp_path, cfg), "must start with 'https://'")
+
+
+def test_canonical_source_ref_rejects_unsafe_characters(tmp_path):
+    cfg = baseline()
+    cfg["canonical_source"] = {
+        "type": "git",
+        "upstream_url": "https://github.com/x/y",
+        "ref": "-rf",
+    }
+    assert has(run(tmp_path, cfg), "must not start with '-'")
+
+
+def test_canonical_source_not_an_object(tmp_path):
+    cfg = baseline()
+    cfg["canonical_source"] = "git"
+    assert has(run(tmp_path, cfg), "must be an object")

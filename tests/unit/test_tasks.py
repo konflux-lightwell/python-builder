@@ -1,3 +1,6 @@
+import json
+import subprocess
+
 import pytest
 
 from lightwell_python.runtime import (
@@ -67,6 +70,45 @@ def test_source_end_to_end(tmp_path, git_repo, config_repo, caplog, build_type, 
     assert "Created sdist: demo-1.0.tar.gz" in caplog.text
     assert "Completed: Finalize sdist handoff and task results" in caplog.text
     assert f"Sdist handoff ready: {tmp_path / 'sdists-output'}" in caplog.text
+
+
+def test_source_git_checkout_path(tmp_path, git_repo, config_repo, caplog):
+    caplog.set_level("INFO")
+    repo, git = git_repo
+    git("commit", "--allow-empty", "-qm", "fix")
+    # Reuse config_repo's demo.json but add canonical_source: git.
+    config_path = config_repo / "packages/demo.json"
+    cfg = json.loads(config_path.read_text())
+    cfg["canonical_source"] = {
+        "type": "git",
+        "upstream_url": "https://example.test/demo",
+        "ref": "1.0",
+    }
+    config_path.write_text(json.dumps(cfg))
+    subprocess.run(
+        ["git", "-C", str(config_repo), "commit", "-aqm", "add canonical_source"], check=True
+    )
+
+    work = tmp_path / "task"
+    work.mkdir()
+    results = tmp_path / "results"
+    source.run(
+        workdir=work,
+        results=results,
+        package=Package("demo", "1.0"),
+        build_type=BuildType.BACKPORT,
+        source_dir=repo,
+        sdists_output=tmp_path / "sdists-output",
+        config_url=str(config_repo),
+        config_revision="HEAD",
+        runner=Runner(),
+    )
+    output = tmp_path / "sdists-output"
+    assert not (output / "downloads").exists()
+    checkout = output / "checkout/demo-1.0+rhlw.1/demo-1.0+rhlw.1"
+    assert checkout.is_dir()
+    assert (checkout / "PKG-INFO").read_text().endswith("Version: 1.0+rhlw.1\n")
+    assert (results / "COMPUTED_VERSION").read_text() == "1.0+rhlw.1"
 
 
 def test_config_clone_credentials_not_in_arguments(tmp_path):
@@ -317,3 +359,63 @@ def test_failed_sbom_attachment_does_not_stage_manifest(tmp_path, wheel_input, m
     assert "Failed: Attach primary SPDX SBOM" in caplog.text
     assert "Completed: Attach primary SPDX SBOM" not in caplog.text
     assert "Build manifest ready:" not in caplog.text
+
+
+def test_canonical_source_defaults_to_pypi_sdist(tmp_path, package_config):
+    from lightwell_python.config import BuildConfig
+
+    path = tmp_path / "demo.json"
+    write_json(path, package_config)
+    config = BuildConfig.load(path, Package("demo", "1.0"))
+    assert config.canonical_source == {"type": "pypi-sdist"}
+
+
+def test_canonical_source_package_level_default(tmp_path, package_config):
+    from lightwell_python.config import BuildConfig
+
+    package_config["canonical_source"] = {
+        "type": "git",
+        "upstream_url": "https://example.test/demo",
+        "ref": "1.0",
+    }
+    path = tmp_path / "demo.json"
+    write_json(path, package_config)
+    config = BuildConfig.load(path, Package("demo", "1.0"))
+    assert config.canonical_source == {
+        "type": "git",
+        "upstream_url": "https://example.test/demo",
+        "ref": "1.0",
+    }
+
+
+def test_canonical_source_version_override_wins(tmp_path, package_config):
+    from lightwell_python.config import BuildConfig
+
+    package_config["canonical_source"] = {"type": "pypi-sdist"}
+    package_config["version_configs"] = {
+        "1.0": {
+            "canonical_source": {
+                "type": "git",
+                "upstream_url": "https://example.test/demo",
+                "ref": "v1.0",
+            }
+        }
+    }
+    path = tmp_path / "demo.json"
+    write_json(path, package_config)
+    config = BuildConfig.load(path, Package("demo", "1.0"))
+    assert config.canonical_source["type"] == "git"
+    assert config.canonical_source["ref"] == "v1.0"
+
+
+def test_canonical_source_version_match_without_override_falls_back_to_package_default(
+    tmp_path, package_config
+):
+    from lightwell_python.config import BuildConfig
+
+    package_config["canonical_source"] = {"type": "pypi-sdist"}
+    package_config["version_configs"] = {"1.0": {"fromager_settings": {}}}
+    path = tmp_path / "demo.json"
+    write_json(path, package_config)
+    config = BuildConfig.load(path, Package("demo", "1.0"))
+    assert config.canonical_source == {"type": "pypi-sdist"}

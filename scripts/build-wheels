@@ -8,6 +8,7 @@ MAX_JOBS=""
 CONSTRAINT_FILES=()
 PACKAGES=()
 BUILD_SEQUENCE_SUMMARIES=()
+CHECKOUT_ROOT=""
 
 # Help function
 show_help() {
@@ -31,12 +32,26 @@ OPTIONS:
     --max-jobs N                    Maximum parallel jobs for builds (default: all CPUs)
     -c, --constraint FILE           Constrain versions using the given constraints file.
                                     This option can be used multiple times.
+    --checkout-root DIR             Build from a pre-staged git checkout instead of
+                                    resolving/bootstrapping a dependency graph. DIR must
+                                    be the package's "<name>-<version>" checkout
+                                    directory: it holds the checkout's .git alongside an
+                                    inner content directory of the same name, i.e.
+                                    DIR/<name>-<version>/ and DIR/.git side by side. The
+                                    script stages DIR into work-dir/<name>-<version>/ and
+                                    runs fromager's "step prepare-build", "step
+                                    build-sdist", and "step build-wheel" commands against
+                                    it (no bootstrap/build-sequence). Intended for a
+                                    single-package invocation: when set, it is applied to
+                                    every PACKAGE argument, so pass exactly one PACKAGE
+                                    alongside it.
     --help                          Show this help message
 
 EXAMPLES:
     $0 urllib3==2.4.0
     $0 urllib3==2.4.0 requests==2.31.0
     $0 --cache-wheel-server-url https://wheels.example.com urllib3==2.4.0 requests==2.31.0
+    $0 --checkout-root /work/checkouts/urllib3-2.4.0 urllib3==2.4.0
 
 ENVIRONMENT:
     DEBUG=1                        Enable debug mode with verbose output
@@ -45,6 +60,9 @@ OUTPUT:
     The script creates wheels and source distributions in the output directory
     and displays the locations of built artifacts. When building multiple packages,
     a separate build-sequence-summary-<package>.json file is generated for each package.
+    In --checkout-root mode, this summary is synthesized directly (fromager's "step"
+    commands do not write one themselves) as a single-entry
+    [{"name", "version", "prebuilt": false, "skipped": false}] record.
 
 BEHAVIOR:
     In multi-package mode, if any package fails to build, the script will exit
@@ -89,6 +107,14 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             CONSTRAINT_FILES+=("$2")
+            shift 2
+            ;;
+        --checkout-root)
+            if [[ $# -lt 2 ]]; then
+                echo "Error: --checkout-root requires a value" >&2
+                exit 1
+            fi
+            CHECKOUT_ROOT="$2"
             shift 2
             ;;
         -*)
@@ -165,7 +191,6 @@ save_build_sequence_summary() {
 for PACKAGE in "${PACKAGES[@]}"; do
     log "Processing package: ${PACKAGE}"
 
-    log "Resolving dependencies and creating build order"
     fromager_args=(
         --settings-file /usr/local/share/fromager/overrides/settings.yaml
     )
@@ -186,45 +211,89 @@ for PACKAGE in "${PACKAGES[@]}"; do
     for f in "${CONSTRAINT_FILES[@]}"; do
         fromager_args+=(--constraints-file "$f")
     done
-    fromager_args+=(bootstrap "${PACKAGE}")
 
-    # Add wheel server URL if provided
-    if [ -n "$WHEEL_SERVER_URL" ]; then
-        fromager_args+=(--cache-wheel-server-url "$WHEEL_SERVER_URL")
+    if [ -n "$CHECKOUT_ROOT" ]; then
+        # Git-checkout mode: build this single package directly from a
+        # pre-staged checkout using fromager's "step" commands, instead of
+        # resolving a dependency graph via bootstrap/build-sequence. See
+        # --help for the required --checkout-root directory layout.
+        log "Building ${PACKAGE} from pre-staged git checkout: ${CHECKOUT_ROOT}"
+
+        if [ ! -d "$CHECKOUT_ROOT" ]; then
+            echo "Error: --checkout-root directory not found: ${CHECKOUT_ROOT}" >&2
+            exit 1
+        fi
+
+        NAME="${PACKAGE%%==*}"
+        VERSION="${PACKAGE##*==}"
+        base="${NAME}-${VERSION}"
+
+        log "Staging checkout into work-dir/${base}"
+        mkdir -p work-dir
+        rm -rf "work-dir/${base}"
+        cp -a "$CHECKOUT_ROOT" "work-dir/${base}"
+
+        for step in prepare-build build-sdist build-wheel; do
+            step_args=("${fromager_args[@]}" step "$step")
+            if [ -n "$WHEEL_SERVER_URL" ] && { [ "$step" = "prepare-build" ] || [ "$step" = "build-wheel" ]; }; then
+                step_args+=(--wheel-server-url "$WHEEL_SERVER_URL")
+            fi
+            step_args+=("$NAME" "$VERSION")
+            echo "Running: fromager ${step_args[*]}"
+            fromager "${step_args[@]}"
+        done
+
+        # fromager's "step" commands don't write a build-sequence summary
+        # (only "build-sequence" does), so synthesize one ourselves.
+        safe_package_name=$(echo "$PACKAGE" | sed 's/[^a-zA-Z0-9._-]/_/g')
+        saved_summary="build-sequence-summary-${safe_package_name}.json"
+        log "Synthesizing build sequence summary for $PACKAGE to $saved_summary"
+        cat > "$saved_summary" <<EOF
+[{"name": "${NAME}", "version": "${VERSION}", "prebuilt": false, "skipped": false}]
+EOF
+        BUILD_SEQUENCE_SUMMARIES+=("$saved_summary")
+    else
+        log "Resolving dependencies and creating build order"
+        fromager_args+=(bootstrap "${PACKAGE}")
+
+        # Add wheel server URL if provided
+        if [ -n "$WHEEL_SERVER_URL" ]; then
+            fromager_args+=(--cache-wheel-server-url "$WHEEL_SERVER_URL")
+        fi
+        echo "Running: fromager ${fromager_args[*]}"
+        fromager "${fromager_args[@]}"
+
+        log "Building wheels from build order"
+        fromager_build_args=(
+            --settings-file /usr/local/share/fromager/overrides/settings.yaml
+        )
+
+        if [ -n "$PACKAGE_SETTINGS_DIR" ]; then
+            fromager_build_args+=(--settings-dir "$PACKAGE_SETTINGS_DIR")
+        fi
+
+        if [ -d "$_builtin_patches_dir" ]; then
+            fromager_build_args+=(--patches-dir "$_builtin_patches_dir")
+        fi
+
+        if [ -n "$MAX_JOBS" ]; then
+            fromager_build_args+=(--jobs "$MAX_JOBS")
+        fi
+        for f in "${CONSTRAINT_FILES[@]}"; do
+            fromager_build_args+=(--constraints-file "$f")
+        done
+        fromager_build_args+=(build-sequence work-dir/build-order.json)
+
+        if [ -n "$WHEEL_SERVER_URL" ]; then
+            fromager_build_args+=(--cache-wheel-server-url "$WHEEL_SERVER_URL")
+        fi
+
+        echo "Running: fromager ${fromager_build_args[*]}"
+        fromager "${fromager_build_args[@]}"
+
+        # Save build sequence summary before clearing work-dir
+        save_build_sequence_summary "$PACKAGE"
     fi
-    echo "Running: fromager ${fromager_args[*]}"
-    fromager "${fromager_args[@]}"
-
-    log "Building wheels from build order"
-    fromager_build_args=(
-        --settings-file /usr/local/share/fromager/overrides/settings.yaml
-    )
-
-    if [ -n "$PACKAGE_SETTINGS_DIR" ]; then
-        fromager_build_args+=(--settings-dir "$PACKAGE_SETTINGS_DIR")
-    fi
-
-    if [ -d "$_builtin_patches_dir" ]; then
-        fromager_build_args+=(--patches-dir "$_builtin_patches_dir")
-    fi
-
-    if [ -n "$MAX_JOBS" ]; then
-        fromager_build_args+=(--jobs "$MAX_JOBS")
-    fi
-    for f in "${CONSTRAINT_FILES[@]}"; do
-        fromager_build_args+=(--constraints-file "$f")
-    done
-    fromager_build_args+=(build-sequence work-dir/build-order.json)
-
-    if [ -n "$WHEEL_SERVER_URL" ]; then
-        fromager_build_args+=(--cache-wheel-server-url "$WHEEL_SERVER_URL")
-    fi
-
-    echo "Running: fromager ${fromager_build_args[*]}"
-    fromager "${fromager_build_args[@]}"
-
-    # Save build sequence summary before clearing work-dir
-    save_build_sequence_summary "$PACKAGE"
 
     # check for manylinux wheels
     log "Checking for manylinux wheels in need of auditwheel repair"

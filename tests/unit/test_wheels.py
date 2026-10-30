@@ -15,9 +15,10 @@ from lightwell_python.build import (
     collect_artifacts,
     repair_wheels,
     run_fromager,
+    run_fromager_checkout,
 )
 from lightwell_python.manifest import build_manifest
-from lightwell_python.runtime import BuildType, Package, TaskError, write_json
+from lightwell_python.runtime import BuildType, Package, TaskError, read_json, write_json
 from lightwell_python.tasks import wheels
 from lightwell_python.wheel_metadata import (
     annotate_ai_attribution,
@@ -263,6 +264,65 @@ def test_missing_build_summary_fails(tmp_path):
             tmp_path / "sdists",
             tmp_path / "settings",
             Package("demo", "1.0"),
+            {},
+        )
+
+
+def _stage_checkout(tmp_path, base):
+    """Create a double-nested checkout layout the way Task 4's export does.
+
+    Args:
+        tmp_path: Per-test temporary directory.
+        base: ``f"{package.name}-{computed}"`` directory name fromager expects.
+
+    Returns:
+        The inner content directory (``checkout/<base>/<base>``).
+    """
+    (tmp_path / "checkout" / base / ".git").mkdir(parents=True)
+    inner = tmp_path / "checkout" / base / base
+    inner.mkdir()
+    return inner
+
+
+def test_run_fromager_checkout_invokes_three_steps_and_synthesizes_summary(tmp_path, make_wheel):
+    calls = []
+
+    def record(args, kwargs):
+        calls.append(args)
+        if "step" in args and args[args.index("step") + 1] == "build-wheel":
+            make_wheel(kwargs["cwd"] / "wheels-repo/downloads")
+
+    runner = FakeRunner(record)
+    inner = _stage_checkout(tmp_path, "demo-1.0+rhlw.1")
+    run_fromager_checkout(
+        runner,
+        tmp_path / "output",
+        inner,
+        tmp_path / "settings",
+        Package("demo", "1.0"),
+        "1.0+rhlw.1",
+        {},
+    )
+    step_calls = [c for c in calls if "step" in c]
+    steps = [c[c.index("step") + 1] for c in step_calls]
+    assert steps == ["prepare-build", "build-sdist", "build-wheel"]
+    for call in step_calls:
+        assert call[-2:] == ["demo", "1.0+rhlw.1"]
+    assert read_json(tmp_path / "output/build-sequence-summary-demo.json") == [
+        {"name": "demo", "version": "1.0+rhlw.1", "prebuilt": False, "skipped": False}
+    ]
+
+
+def test_run_fromager_checkout_no_wheel_fails(tmp_path):
+    inner = _stage_checkout(tmp_path, "demo-1.0+rhlw.1")
+    with pytest.raises(TaskError, match="wheel"):
+        run_fromager_checkout(
+            FakeRunner(),
+            tmp_path / "output",
+            inner,
+            tmp_path / "settings",
+            Package("demo", "1.0"),
+            "1.0+rhlw.1",
             {},
         )
 
@@ -528,3 +588,69 @@ def test_unsafe_models_fail_before_build(run_wheels, tmp_path):
     with pytest.raises(TaskError, match="AI_MODELS must be"):
         run_wheels(ai_assisted=True, ai_models="m; lightwell:aiSource=x")
     assert list((tmp_path / "task").iterdir()) == []
+
+
+@pytest.fixture
+def checkout_input(tmp_path, package_config):
+    """Provide a git-mode restored input tree, mirroring Task 4's export layout.
+
+    Unlike wheel_input, there is no downloads/ sdist tarball and no builds/ dir —
+    only a staged checkout/<base>/<base> tree (with .git alongside it), plus the
+    usual build-config snapshot, backend-env.json, and .commit.
+
+    Args:
+        tmp_path: Per-test temporary directory.
+        package_config: Base package JSON body shared with the sdist-mode fixtures.
+
+    Returns:
+        Path to the restored input tree's root.
+    """
+    path = tmp_path / "git-input"
+    config = {
+        **package_config,
+        "canonical_source": {
+            "type": "git",
+            "upstream_url": "https://example.test/demo",
+            "ref": "1.0",
+        },
+    }
+    write_json(path / "build-configs/packages/demo.json", config)
+    write_json(path / "backend-env.json", {})
+    (path / ".commit").write_text("abcdef1")
+    base = "demo-1.0+rhlw.1"
+    staged = path / "checkout" / base
+    (staged / ".git").mkdir(parents=True)
+    inner = staged / base
+    inner.mkdir()
+    (inner / "PKG-INFO").write_text("Name: demo\nVersion: 1.0\n")
+    return path
+
+
+def test_checkout_mode_builds_and_publishes_wheel(tmp_path, checkout_input, make_wheel):
+    """Git-mode input (canonical_source type 'git') takes the checkout build path.
+
+    The FakeRunner callback only recognizes 'step build-wheel', not
+    'build-sequence', so this fails loudly if run() wrongly took the sdist-mode
+    find_sdist/run_fromager path instead of run_fromager_checkout.
+    """
+
+    def build(args, kwargs):
+        if "step" in args and args[args.index("step") + 1] == "build-wheel":
+            make_wheel(kwargs["cwd"] / "wheels-repo/downloads")
+
+    work = tmp_path / "task"
+    work.mkdir()
+    registry = FakeRegistry()
+    wheels.run(
+        workdir=work,
+        results=tmp_path / "results",
+        package=Package("demo", "1.0"),
+        computed="1.0+rhlw.1",
+        build_type=BuildType.BACKPORT,
+        sdists_dir=checkout_input,
+        image="localhost:5000/org/repo:latest",
+        manifest_output=tmp_path / "manifest-output.json",
+        registry=registry,
+        runner=FakeRunner(build),
+    )
+    assert any(call[0] == "push" for call in registry.calls)

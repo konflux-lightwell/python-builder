@@ -8,6 +8,7 @@ import shutil
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from lightwell_python import git_checkout
 from lightwell_python.archives import create_sdist
 from lightwell_python.config import BuildConfig
 from lightwell_python.runtime import (
@@ -136,13 +137,25 @@ def run(
         )
 
     with log_stage("Rewrite source version metadata"):
-        rewrite_metadata(repo / "source", package, version.full, config.rewrites)
+        rewritten = rewrite_metadata(repo / "source", package, version.full, config.rewrites)
 
-    with log_stage("Create deterministic sdist and cache aliases"):
-        archive = create_sdist(repo / "source", staging, package, version.full)
-        LOG.info("Created sdist: %s (%d bytes)", archive.name, archive.stat().st_size)
-        if version.commit:
-            (staging / ".commit").write_text(version.commit)
+    if config.canonical_source["type"] == "git":
+        with log_stage("Stage verified git checkout"):
+            head_sha = git_checkout.retag(repo, version.full, runner)
+            git_checkout.verify_clean(repo, rewritten, runner)
+            base = f"{package.name}-{version.full}"
+            checkout = staging / "checkout" / base
+            shutil.copytree(repo / "source", checkout / base, symlinks=True)
+            shutil.copytree(repo / ".git", checkout / ".git", symlinks=True)
+            LOG.info("Staged git checkout: %s (HEAD %s)", checkout, head_sha)
+            if version.commit:
+                (staging / ".commit").write_text(version.commit)
+    else:
+        with log_stage("Create deterministic sdist and cache aliases"):
+            archive = create_sdist(repo / "source", staging, package, version.full)
+            LOG.info("Created sdist: %s (%d bytes)", archive.name, archive.stat().st_size)
+            if version.commit:
+                (staging / ".commit").write_text(version.commit)
 
     with log_stage("Finalize sdist handoff and task results"):
         sdists_output.parent.mkdir(parents=True, exist_ok=True)
