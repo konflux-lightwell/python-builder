@@ -7,7 +7,13 @@ import re
 from pathlib import Path
 
 from lightwell_python.archives import find_sdist
-from lightwell_python.build import backend_environment, collect_artifacts, run_fromager, sync_sdists
+from lightwell_python.build import (
+    backend_environment,
+    collect_artifacts,
+    run_fromager,
+    run_fromager_checkout,
+    sync_sdists,
+)
 from lightwell_python.config import BuildConfig
 from lightwell_python.manifest import build_manifest
 from lightwell_python.registry import Registry, repository
@@ -106,8 +112,6 @@ def run(
     sdists = workdir / "sdists-repo"
     with log_stage("Copy and validate restored sdist inputs"):
         copy_input_tree(sdists_dir, sdists)
-        archive = find_sdist(sdists, package, computed)
-        LOG.info("Using sdist: %s", archive)
 
     with log_stage("Validate configuration snapshot and render Fromager settings"):
         config = BuildConfig.load(
@@ -122,17 +126,33 @@ def run(
 
     output = workdir / "output"
     with backend_environment(runner.environment | environment, pulp_secret) as env:
-        run_fromager(
-            runner,
-            output,
-            sdists,
-            settings,
-            package,
-            env,
-            wheel_server,
-            overrides=overrides,
-            jobs=jobs,
-        )
+        if config.canonical_source["type"] == "git":
+            run_fromager_checkout(
+                runner,
+                output,
+                sdists / "checkout" / f"{package.name}-{computed}" / f"{package.name}-{computed}",
+                settings,
+                package,
+                computed,
+                env,
+                wheel_server,
+                overrides=overrides,
+                jobs=jobs,
+            )
+        else:
+            archive = find_sdist(sdists, package, computed)
+            LOG.info("Using sdist: %s", archive)
+            run_fromager(
+                runner,
+                output,
+                sdists,
+                settings,
+                package,
+                env,
+                wheel_server,
+                overrides=overrides,
+                jobs=jobs,
+            )
 
     artifact = workdir / "artifact"
     with log_stage("Collect built wheels, sdists, and summaries"):

@@ -588,3 +588,69 @@ def test_unsafe_models_fail_before_build(run_wheels, tmp_path):
     with pytest.raises(TaskError, match="AI_MODELS must be"):
         run_wheels(ai_assisted=True, ai_models="m; lightwell:aiSource=x")
     assert list((tmp_path / "task").iterdir()) == []
+
+
+@pytest.fixture
+def checkout_input(tmp_path, package_config):
+    """Provide a git-mode restored input tree, mirroring Task 4's export layout.
+
+    Unlike wheel_input, there is no downloads/ sdist tarball and no builds/ dir —
+    only a staged checkout/<base>/<base> tree (with .git alongside it), plus the
+    usual build-config snapshot, backend-env.json, and .commit.
+
+    Args:
+        tmp_path: Per-test temporary directory.
+        package_config: Base package JSON body shared with the sdist-mode fixtures.
+
+    Returns:
+        Path to the restored input tree's root.
+    """
+    path = tmp_path / "git-input"
+    config = {
+        **package_config,
+        "canonical_source": {
+            "type": "git",
+            "upstream_url": "https://example.test/demo",
+            "ref": "1.0",
+        },
+    }
+    write_json(path / "build-configs/packages/demo.json", config)
+    write_json(path / "backend-env.json", {})
+    (path / ".commit").write_text("abcdef1")
+    base = "demo-1.0+rhlw.1"
+    staged = path / "checkout" / base
+    (staged / ".git").mkdir(parents=True)
+    inner = staged / base
+    inner.mkdir()
+    (inner / "PKG-INFO").write_text("Name: demo\nVersion: 1.0\n")
+    return path
+
+
+def test_checkout_mode_builds_and_publishes_wheel(tmp_path, checkout_input, make_wheel):
+    """Git-mode input (canonical_source type 'git') takes the checkout build path.
+
+    The FakeRunner callback only recognizes 'step build-wheel', not
+    'build-sequence', so this fails loudly if run() wrongly took the sdist-mode
+    find_sdist/run_fromager path instead of run_fromager_checkout.
+    """
+
+    def build(args, kwargs):
+        if "step" in args and args[args.index("step") + 1] == "build-wheel":
+            make_wheel(kwargs["cwd"] / "wheels-repo/downloads")
+
+    work = tmp_path / "task"
+    work.mkdir()
+    registry = FakeRegistry()
+    wheels.run(
+        workdir=work,
+        results=tmp_path / "results",
+        package=Package("demo", "1.0"),
+        computed="1.0+rhlw.1",
+        build_type=BuildType.BACKPORT,
+        sdists_dir=checkout_input,
+        image="localhost:5000/org/repo:latest",
+        manifest_output=tmp_path / "manifest-output.json",
+        registry=registry,
+        runner=FakeRunner(build),
+    )
+    assert any(call[0] == "push" for call in registry.calls)
