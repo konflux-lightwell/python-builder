@@ -1,4 +1,4 @@
-ARG BUILDER_IMAGE=quay.io/light-factory/python-builder@sha256:a746f8964e7e549a57fa7164c3852b33e62e544d993af87d26a1a870dfa4a57a
+ARG BUILDER_IMAGE=quay.io/light-factory/python-builder@sha256:e328dac08f09a8e7b0f72c7f2c9431d37f1510ffe88938da4eb610a8d891fa1c
 
 FROM quay.io/konflux-ci/oras:latest@sha256:1beeecce012c99794568f74265c065839f9703d28306a8430b667f639343a98b AS oras-bin
 FROM ghcr.io/sigstore/cosign/cosign:v3.1.4@sha256:0f06154836d2de34f887a5c273506d52ca43edaa1d9e53e6510fa78a48f69c2d AS cosign-bin
