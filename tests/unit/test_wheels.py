@@ -15,9 +15,10 @@ from lightwell_python.build import (
     collect_artifacts,
     repair_wheels,
     run_fromager,
+    run_fromager_checkout,
 )
 from lightwell_python.manifest import build_manifest
-from lightwell_python.runtime import BuildType, Package, TaskError, write_json
+from lightwell_python.runtime import BuildType, Package, TaskError, read_json, write_json
 from lightwell_python.tasks import wheels
 from lightwell_python.wheel_metadata import (
     annotate_ai_attribution,
@@ -263,6 +264,65 @@ def test_missing_build_summary_fails(tmp_path):
             tmp_path / "sdists",
             tmp_path / "settings",
             Package("demo", "1.0"),
+            {},
+        )
+
+
+def _stage_checkout(tmp_path, base):
+    """Create a double-nested checkout layout the way Task 4's export does.
+
+    Args:
+        tmp_path: Per-test temporary directory.
+        base: ``f"{package.name}-{computed}"`` directory name fromager expects.
+
+    Returns:
+        The inner content directory (``checkout/<base>/<base>``).
+    """
+    (tmp_path / "checkout" / base / ".git").mkdir(parents=True)
+    inner = tmp_path / "checkout" / base / base
+    inner.mkdir()
+    return inner
+
+
+def test_run_fromager_checkout_invokes_three_steps_and_synthesizes_summary(tmp_path, make_wheel):
+    calls = []
+
+    def record(args, kwargs):
+        calls.append(args)
+        if "step" in args and args[args.index("step") + 1] == "build-wheel":
+            make_wheel(kwargs["cwd"] / "wheels-repo/downloads")
+
+    runner = FakeRunner(record)
+    inner = _stage_checkout(tmp_path, "demo-1.0+rhlw.1")
+    run_fromager_checkout(
+        runner,
+        tmp_path / "output",
+        inner,
+        tmp_path / "settings",
+        Package("demo", "1.0"),
+        "1.0+rhlw.1",
+        {},
+    )
+    step_calls = [c for c in calls if "step" in c]
+    steps = [c[c.index("step") + 1] for c in step_calls]
+    assert steps == ["prepare-build", "build-sdist", "build-wheel"]
+    for call in step_calls:
+        assert call[-2:] == ["demo", "1.0+rhlw.1"]
+    assert read_json(tmp_path / "output/build-sequence-summary-demo.json") == [
+        {"name": "demo", "version": "1.0+rhlw.1", "prebuilt": False, "skipped": False}
+    ]
+
+
+def test_run_fromager_checkout_no_wheel_fails(tmp_path):
+    inner = _stage_checkout(tmp_path, "demo-1.0+rhlw.1")
+    with pytest.raises(TaskError, match="wheel"):
+        run_fromager_checkout(
+            FakeRunner(),
+            tmp_path / "output",
+            inner,
+            tmp_path / "settings",
+            Package("demo", "1.0"),
+            "1.0+rhlw.1",
             {},
         )
 
