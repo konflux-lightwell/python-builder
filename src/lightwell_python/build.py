@@ -15,7 +15,7 @@ from pathlib import Path
 from packaging.utils import parse_sdist_filename, parse_wheel_filename
 from packaging.version import Version
 
-from lightwell_python.runtime import Package, Runner, TaskError, log_stage, sha256
+from lightwell_python.runtime import Package, Runner, TaskError, log_stage, sha256, write_json
 from lightwell_python.wheel_metadata import patch_wheel, system_libraries
 
 LOG = logging.getLogger(__name__)
@@ -121,6 +121,83 @@ def run_fromager(
     shutil.copyfile(summary, output / f"build-sequence-summary-{package.name}.json")
     with log_stage("Repair native wheels and update embedded SBOMs"):
         repair_wheels(runner, output / "wheels-repo/downloads", env)
+
+
+def run_fromager_checkout(
+    runner: Runner,
+    output: Path,
+    checkout: Path,
+    settings: Path,
+    package: Package,
+    computed: str,
+    environment: dict[str, str],
+    wheel_server: str = "",
+    *,
+    overrides: Path = Path("/usr/local/share/fromager/overrides"),
+    jobs: int | None = None,
+) -> None:
+    """Build a package from a pre-staged git checkout using Fromager's step commands.
+
+    Unlike ``run_fromager``, this does not bootstrap or run ``build-sequence``: a
+    git checkout is a single already-known source, so this stages it directly into
+    Fromager's work directory and drives ``step prepare-build`` / ``build-sdist`` /
+    ``build-wheel`` in sequence. ``step`` subcommands do not write a build summary,
+    so one is synthesized here instead of copied from Fromager's own output.
+
+    Args:
+        runner: Adapter used to execute Fromager and auditwheel.
+        output: New build output directory; it must not already exist.
+        checkout: Inner content directory of the staged checkout, i.e.
+            ``<base>/<base>`` where ``checkout.parent`` (``<base>``) also holds the
+            checkout's ``.git`` directory.
+        settings: Directory containing resolved per-package Fromager YAML.
+        package: Primary distribution being built.
+        computed: Full version Fromager should build and tag the wheel with.
+        environment: Backend environment, including any temporary credentials.
+        wheel_server: Optional cache URL; empty disables prebuilt-wheel lookup.
+        overrides: Builder-provided directory containing settings.yaml and patches.
+        jobs: Optional Fromager parallelism limit.
+
+    Raises:
+        TaskError: A tool fails or no wheel is produced.
+        FileExistsError: The output directory already exists.
+    """
+    output.mkdir(parents=True, exist_ok=False)
+    base = f"{package.name}-{computed}"
+    shutil.copytree(checkout.parent, output / "work-dir" / base, symlinks=True)
+    common: list[str | Path] = [
+        "fromager",
+        "--settings-file",
+        overrides / "settings.yaml",
+        "--settings-dir",
+        settings,
+    ]
+    if (overrides / "patches").is_dir():
+        common += ["--patches-dir", overrides / "patches"]
+    if jobs:
+        common += ["--jobs", str(jobs)]
+    env = environment | {"SOURCE_DATE_EPOCH": "0"}
+    with log_stage("Fromager checkout build sequence"):
+        for step in ("prepare-build", "build-sdist", "build-wheel"):
+            wheel_option = (
+                ["--wheel-server-url", wheel_server]
+                if wheel_server and step in ("prepare-build", "build-wheel")
+                else []
+            )
+            runner.run(
+                [*common, "step", step, *wheel_option, package.name, computed],
+                cwd=output,
+                env=env,
+            )
+    wheels = output / "wheels-repo/downloads"
+    if not (wheels.is_dir() and any(wheels.glob("*.whl"))):
+        raise TaskError("Fromager produced no wheel")
+    write_json(
+        output / f"build-sequence-summary-{package.name}.json",
+        [{"name": package.name, "version": computed, "prebuilt": False, "skipped": False}],
+    )
+    with log_stage("Repair native wheels and update embedded SBOMs"):
+        repair_wheels(runner, wheels, env)
 
 
 def repair_wheels(runner: Runner, wheels: Path, environment: dict[str, str]) -> None:
