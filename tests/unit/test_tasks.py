@@ -363,6 +363,7 @@ def test_failed_sbom_attachment_does_not_stage_manifest(tmp_path, wheel_input, m
 
 def test_canonical_source_defaults_to_pypi_sdist(tmp_path, package_config):
     from lightwell_python.config import BuildConfig
+
     path = tmp_path / "demo.json"
     write_json(path, package_config)
     config = BuildConfig.load(path, Package("demo", "1.0"))
@@ -371,6 +372,7 @@ def test_canonical_source_defaults_to_pypi_sdist(tmp_path, package_config):
 
 def test_canonical_source_package_level_default(tmp_path, package_config):
     from lightwell_python.config import BuildConfig
+
     package_config["canonical_source"] = {
         "type": "git",
         "upstream_url": "https://example.test/demo",
@@ -388,6 +390,7 @@ def test_canonical_source_package_level_default(tmp_path, package_config):
 
 def test_canonical_source_version_override_wins(tmp_path, package_config):
     from lightwell_python.config import BuildConfig
+
     package_config["canonical_source"] = {"type": "pypi-sdist"}
     package_config["version_configs"] = {
         "1.0": {
@@ -409,6 +412,7 @@ def test_canonical_source_version_match_without_override_falls_back_to_package_d
     tmp_path, package_config
 ):
     from lightwell_python.config import BuildConfig
+
     package_config["canonical_source"] = {"type": "pypi-sdist"}
     package_config["version_configs"] = {"1.0": {"fromager_settings": {}}}
     path = tmp_path / "demo.json"
