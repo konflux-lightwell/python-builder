@@ -7,7 +7,7 @@ argcomplete==3.7.2 \
 certifi==2026.10.19 \
     --hash=sha256:035c1e85572b141bf1c3a3eff0e33a8eb74917522f2559075ff8d2fea780a1ae \
     --hash=sha256:42d35340cc5b9ba78e818ddbff0c5b1c2b779de448a340fd1b989f5fa8670e1b
-    # via -r requirements-base-tools.in
+    # via -r build_scripts/requirements-base-tools.in
 click==8.3.0 \
     --hash=sha256:9b9f285302c6e3064f4330c05f05b81945b2a39544279343e6e7c5f27a9baddc \
     --hash=sha256:e7b8232224eba16f4ebe410c25ced9f7875cb5f3263ffc93cc3e8da705e229c4
@@ -20,10 +20,10 @@ packaging==26.3 \
     --hash=sha256:94edc256424af38762eb31306eed28beb9f0efc50a8837492c9d6fd6004aed79 \
     --hash=sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c
     # via pipx
-pipx==1.18.4 \
-    --hash=sha256:4672195db7e89526cda1e54cbea116164a58bd40e1c03fe12e380de16b5399a4 \
-    --hash=sha256:7b871c2f00dd3cdbdeade21e76f58ef8c3315a68903ca7c976e20424fae78133
-    # via -r requirements-base-tools.in
+pipx==1.18.11 \
+    --hash=sha256:be6843368a9370e3d4cddf8dcc1506817cac2572897341d690c079c073239dde \
+    --hash=sha256:cd6749cba6e92e305e8e6280e9636c458442b9792b9cd893f9bbcb75bcf0271a
+    # via -r build_scripts/requirements-base-tools.in
 platformdirs==4.13.5 \
     --hash=sha256:05831adf87d392760f4b5c3a0a95579ab5a10b18b9b9bd43680dcb47544788a0 \
     --hash=sha256:53d3ec4280b815c1e0b02edad7f9ee8fda1ba9c0865dd9c2e6e63849ce82fc1e
