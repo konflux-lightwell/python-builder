@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from lightwell_python.runtime import Runner, TaskError
+from lightwell_python.runtime import Runner, TaskError, run_git
 
 
 def retag(repo: Path, computed: str, runner: Runner) -> str:
@@ -21,35 +21,25 @@ def retag(repo: Path, computed: str, runner: Runner) -> str:
     Raises:
         TaskError: Git operations fail or verification fails.
     """
-    base = ["git", "-c", f"safe.directory={repo}", "-C", str(repo)]
-
-    def git(*args: str) -> str:
-        """Run a read-only git query scoped to this repository."""
-        return runner.run([*base, *args], capture=True).strip()
-
-    def git_run(*args: str) -> None:
-        """Run a git mutation scoped to this repository."""
-        runner.run([*base, *args])
-
     # Get current tags at HEAD
-    tags_output = git("tag", "--points-at", "HEAD")
+    tags_output = run_git(runner, repo, "tag", "--points-at", "HEAD").strip()
     current_tags = [tag.strip() for tag in tags_output.split("\n") if tag.strip()]
 
     # Untag all current tags
     for tag in current_tags:
-        git_run("tag", "-d", tag)
+        run_git(runner, repo, "tag", "-d", tag, capture=False)
 
     # Apply new tag
     new_tag = f"v{computed}"
-    git_run("tag", new_tag)
+    run_git(runner, repo, "tag", new_tag, capture=False)
 
     # Verify the tag is exactly what we applied
-    verified_tag = git("describe", "--tags", "--exact-match", "HEAD")
+    verified_tag = run_git(runner, repo, "describe", "--tags", "--exact-match", "HEAD").strip()
     if verified_tag != new_tag:
         raise TaskError(f"Tag verification failed: expected {new_tag}, got {verified_tag}")
 
     # Return HEAD SHA
-    return git("rev-parse", "HEAD")
+    return run_git(runner, repo, "rev-parse", "HEAD").strip()
 
 
 def verify_clean(repo: Path, rewritten: list[Path], runner: Runner) -> None:
@@ -65,18 +55,13 @@ def verify_clean(repo: Path, rewritten: list[Path], runner: Runner) -> None:
         TaskError: Actual dirty files don't match expected set exactly.
     """
     resolved_repo = repo.resolve()
-    base = ["git", "-c", f"safe.directory={repo}", "-C", str(repo)]
-
-    def git(*args: str) -> str:
-        """Run a read-only git query scoped to this repository."""
-        return runner.run([*base, *args], capture=True).rstrip("\n")
 
     # Use -z (NUL-separated, unquoted paths) so renames and quoted/non-ASCII
     # paths parse correctly. A normal entry is one "XY PATH" field; a
     # rename/copy entry (X or Y is 'R'/'C') is followed by a SEPARATE field
     # holding the original path with no status prefix, which must be consumed
     # rather than parsed as a new record.
-    status_output = git("status", "--porcelain=v1", "-z")
+    status_output = run_git(runner, repo, "status", "--porcelain=v1", "-z")
     fields = status_output.split("\0")
     dirty_files = set()
     index = 0

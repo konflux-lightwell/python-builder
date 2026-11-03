@@ -189,6 +189,33 @@ class Runner:
         raise TaskError(f"{Path(command[0]).name} exited with status {result.returncode}")
 
 
+def run_git(runner: Runner, repo: Path, *args: str, capture: bool = True) -> str:
+    """Run a Git command scoped to a repository.
+
+    Shared by every caller that needs a repository-scoped Git invocation
+    (retag/verify_clean in git_checkout.py, compute_version in versioning.py),
+    so the ``safe.directory``/``-C`` scoping and output trimming stay consistent.
+
+    Args:
+        runner: Command executor.
+        repo: Git repository root, used for both ``-C`` and ``safe.directory``.
+        args: Git subcommand and its arguments.
+        capture: Capture stdout for a read-only query (the default). Pass
+            False for a mutation (e.g. ``tag -d``) that produces no useful
+            output; the return value is then always an empty string.
+
+    Returns:
+        Captured stdout with trailing newlines stripped. Porcelain's leading
+        status column, if any, is preserved — callers needing a single token
+        (a SHA, a count, a tag name) should call ``.strip()`` themselves.
+
+    Raises:
+        TaskError: The Git invocation fails.
+    """
+    command = ["git", "-c", f"safe.directory={repo}", "-C", str(repo), *args]
+    return runner.run(command, capture=capture).rstrip("\n")
+
+
 def read_json(path: Path) -> Any:
     """Read UTF-8 JSON while rejecting duplicate object keys.
 

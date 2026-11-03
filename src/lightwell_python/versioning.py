@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from lightwell_python.config import expand
-from lightwell_python.runtime import BuildType, Package, Runner, TaskError, contained_file
+from lightwell_python.runtime import BuildType, Package, Runner, TaskError, contained_file, run_git
 
 
 @dataclass(frozen=True)
@@ -58,11 +58,10 @@ def compute_version(
         raise TaskError("Remediation requires an upstream version without a local suffix")
     if build_type == BuildType.SCRATCH:
         return ComputedVersion(package.version + "+rhlw.0")
-    base = ["git", "-c", f"safe.directory={repo}", "-C", str(repo)]
 
     def git(*args: str) -> str:
         """Run a read-only Git query scoped to this repository."""
-        return runner.run([*base, *args], capture=True).strip()
+        return run_git(runner, repo, *args).strip()
 
     ingestion = git(
         "rev-parse", "--verify", f"refs/tags/{package.name}/{package.version}^{{commit}}"
