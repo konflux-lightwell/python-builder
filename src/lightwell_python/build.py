@@ -176,12 +176,18 @@ def run_fromager_checkout(
     ``build-wheel`` in sequence. ``step`` subcommands do not write a build summary,
     so one is synthesized here instead of copied from Fromager's own output.
 
+    This CONSUMES the passed checkout: ``checkout.parent`` (``<base>``, including
+    its sibling ``.git``) is moved, not copied, into Fromager's work directory, so
+    it no longer exists at its original location once this returns. Callers must
+    pass a scratch copy they don't need afterward, never the restored input
+    directly.
+
     Args:
         runner: Adapter used to execute Fromager and auditwheel.
         output: New build output directory; it must not already exist.
         checkout: Inner content directory of the staged checkout, i.e.
             ``<base>/<base>`` where ``checkout.parent`` (``<base>``) also holds the
-            checkout's ``.git`` directory.
+            checkout's ``.git`` directory. Moved (not copied) into ``output``.
         settings: Directory containing resolved per-package Fromager YAML.
         package: Primary distribution being built.
         computed: Full version Fromager should build and tag the wheel with.
@@ -205,7 +211,9 @@ def run_fromager_checkout(
         raise TaskError(f"Checkout directory is missing: {checkout}")
     output.mkdir(parents=True, exist_ok=False)
     base = f"{package.name}-{computed}"
-    shutil.copytree(checkout.parent, output / "work-dir" / base, symlinks=True)
+    work_dir = output / "work-dir"
+    work_dir.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(checkout.parent), work_dir / base)
     common = _fromager_common_args(settings, overrides, jobs)
     env = environment | {"SOURCE_DATE_EPOCH": "315532800"}
     # See the wheel_server docstring above: "step" has no bootstrap-style PyPI

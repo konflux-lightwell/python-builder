@@ -303,7 +303,8 @@ def test_run_fromager_checkout_invokes_three_steps_and_synthesizes_summary(tmp_p
             make_wheel(kwargs["cwd"] / "wheels-repo/build")
 
     runner = FakeRunner(record)
-    inner = _stage_checkout(tmp_path, "demo-1.0+rhlw.1")
+    base = "demo-1.0+rhlw.1"
+    inner = _stage_checkout(tmp_path, base)
     run_fromager_checkout(
         runner,
         tmp_path / "output",
@@ -323,6 +324,11 @@ def test_run_fromager_checkout_invokes_three_steps_and_synthesizes_summary(tmp_p
     assert read_json(tmp_path / "output/build-sequence-summary-demo.json") == [
         {"name": "demo", "version": "1.0+rhlw.1", "prebuilt": False, "skipped": False}
     ]
+    staged_git = tmp_path / "output/work-dir" / base / ".git"
+    assert staged_git.is_dir()
+    assert not staged_git.is_symlink()
+    assert (tmp_path / "output/work-dir" / base / base).is_dir()
+    assert not (tmp_path / "checkout" / base).exists()
 
 
 def test_run_fromager_checkout_defaults_wheel_server_to_pypi(tmp_path, make_wheel):
@@ -773,3 +779,15 @@ def test_checkout_mode_builds_and_publishes_wheel(tmp_path, checkout_input, make
         runner=FakeRunner(build),
     )
     assert any(call[0] == "push" for call in registry.calls)
+
+    base = "demo-1.0+rhlw.1"
+    # Restored input is untouched.
+    assert (checkout_input / "checkout" / base / ".git").is_dir()
+    assert (checkout_input / "checkout" / base / base).is_dir()
+    # Scratch copy was moved out of sdists-repo, not left behind.
+    assert not (work / "sdists-repo/checkout" / base).exists()
+    # Fromager's work-dir received the moved checkout, not a symlinked copy.
+    staged_git = work / "output/work-dir" / base / ".git"
+    assert staged_git.is_dir()
+    assert not staged_git.is_symlink()
+    assert (work / "output/work-dir" / base / base).is_dir()
