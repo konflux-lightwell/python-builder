@@ -163,6 +163,8 @@ def run_fromager_checkout(
         FileExistsError: The output directory already exists.
     """
     output.mkdir(parents=True, exist_ok=False)
+    if not checkout.is_dir():
+        raise TaskError(f"Checkout directory is missing: {checkout}")
     base = f"{package.name}-{computed}"
     shutil.copytree(checkout.parent, output / "work-dir" / base, symlinks=True)
     common: list[str | Path] = [
