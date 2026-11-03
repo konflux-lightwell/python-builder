@@ -74,6 +74,20 @@ def _require_nonempty_str(value, label: str, errors: list[str]) -> None:
         errors.append(f"{label} must be a non-empty string")
 
 
+def _validate_https_url(value, loc: str, field: str, errors: list[str]) -> None:
+    """Require a non-empty string that also starts with 'https://'.
+
+    Reuses _require_nonempty_str for the type/emptiness check; the 'https://'
+    check only runs when that check didn't already append an error, so a
+    non-string or empty value gets exactly one error, not two.
+    """
+    label = f"{loc}.{field}"
+    before = len(errors)
+    _require_nonempty_str(value, label, errors)
+    if len(errors) == before and not value.startswith("https://"):
+        errors.append(f"{label} must start with 'https://': {value!r}")
+
+
 def _load_config(path: Path) -> tuple[dict | None, list[str]]:
     """Read and parse the JSON file.
 
@@ -355,18 +369,10 @@ def _validate_canonical_source(cs, loc: str, errors: list[str]) -> None:
     if "upstream_url" not in cs:
         errors.append(f"{loc}: missing required field 'upstream_url' for type 'git'")
     else:
-        upstream_url = cs["upstream_url"]
-        if not isinstance(upstream_url, str) or not upstream_url.strip():
-            errors.append(f"{loc}.upstream_url must be a non-empty string")
-        elif not upstream_url.startswith("https://"):
-            errors.append(f"{loc}.upstream_url must start with 'https://': {upstream_url!r}")
+        _validate_https_url(cs["upstream_url"], loc, "upstream_url", errors)
 
     if "internal_url" in cs:
-        internal_url = cs["internal_url"]
-        if not isinstance(internal_url, str) or not internal_url.strip():
-            errors.append(f"{loc}.internal_url must be a non-empty string")
-        elif not internal_url.startswith("https://"):
-            errors.append(f"{loc}.internal_url must start with 'https://': {internal_url!r}")
+        _validate_https_url(cs["internal_url"], loc, "internal_url", errors)
 
     if "ref" not in cs:
         errors.append(f"{loc}: missing required field 'ref' for type 'git'")
