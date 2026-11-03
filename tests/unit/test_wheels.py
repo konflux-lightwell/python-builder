@@ -314,18 +314,24 @@ def test_run_fromager_checkout_invokes_three_steps_and_synthesizes_summary(tmp_p
 
 
 def test_run_fromager_checkout_missing_checkout_fails(tmp_path):
-    """A missing checkout directory fails with TaskError, not a raw FileNotFoundError."""
+    """A missing checkout directory fails with TaskError, not a raw FileNotFoundError.
+
+    It must also fail before creating `output`, leaving no stray empty directory
+    behind for a caller to clean up or collide with on retry.
+    """
     missing = tmp_path / "checkout" / "demo-1.0+rhlw.1" / "demo-1.0+rhlw.1"
+    output = tmp_path / "output"
     with pytest.raises(TaskError, match="missing"):
         run_fromager_checkout(
             FakeRunner(),
-            tmp_path / "output",
+            output,
             missing,
             tmp_path / "settings",
             Package("demo", "1.0"),
             "1.0+rhlw.1",
             {},
         )
+    assert not output.exists()
 
 
 def test_run_fromager_checkout_no_wheel_fails(tmp_path):

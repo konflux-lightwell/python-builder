@@ -192,9 +192,9 @@ def run_fromager_checkout(
         TaskError: A tool fails or no wheel is produced.
         FileExistsError: The output directory already exists.
     """
-    output.mkdir(parents=True, exist_ok=False)
     if not checkout.is_dir():
         raise TaskError(f"Checkout directory is missing: {checkout}")
+    output.mkdir(parents=True, exist_ok=False)
     base = f"{package.name}-{computed}"
     shutil.copytree(checkout.parent, output / "work-dir" / base, symlinks=True)
     common = _fromager_common_args(settings, overrides, jobs)
