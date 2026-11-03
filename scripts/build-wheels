@@ -136,6 +136,15 @@ if [[ ${#PACKAGES[@]} -eq 0 ]]; then
     exit 1
 fi
 
+# --checkout-root is documented as single-package only: it is staged into a
+# single work-dir/<name>-<version> directory, so more than one PACKAGE would
+# silently share that one checkout root. Fail before attempting any build.
+if [[ -n "$CHECKOUT_ROOT" ]] && [[ ${#PACKAGES[@]} -gt 1 ]]; then
+    echo "Error: --checkout-root requires exactly one PACKAGE, got ${#PACKAGES[@]}: ${PACKAGES[*]}" >&2
+    echo "Use --help for usage information" >&2
+    exit 1
+fi
+
 if [ "${DEBUG:-}" = "1" ]; then
     set -x
 fi
@@ -224,8 +233,16 @@ for PACKAGE in "${PACKAGES[@]}"; do
             exit 1
         fi
 
+        if [[ "$PACKAGE" != *"=="* ]]; then
+            echo "Error: --checkout-root requires a pinned PACKAGE (name==version), got: ${PACKAGE}" >&2
+            exit 1
+        fi
         NAME="${PACKAGE%%==*}"
         VERSION="${PACKAGE##*==}"
+        if [[ -z "$NAME" ]] || [[ -z "$VERSION" ]]; then
+            echo "Error: --checkout-root requires a pinned PACKAGE (name==version), got: ${PACKAGE}" >&2
+            exit 1
+        fi
         base="${NAME}-${VERSION}"
 
         log "Staging checkout into work-dir/${base}"
@@ -242,6 +259,11 @@ for PACKAGE in "${PACKAGES[@]}"; do
             echo "Running: fromager ${step_args[*]}"
             fromager "${step_args[@]}"
         done
+
+        if [ -z "$(find wheels-repo/downloads -maxdepth 1 -name '*.whl' -print -quit 2>/dev/null)" ]; then
+            echo "Error: fromager produced no wheel for ${PACKAGE} under wheels-repo/downloads" >&2
+            exit 1
+        fi
 
         # fromager's "step" commands don't write a build-sequence summary
         # (only "build-sequence" does), so synthesize one ourselves.
