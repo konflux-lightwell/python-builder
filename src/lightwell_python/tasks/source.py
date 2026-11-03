@@ -145,8 +145,9 @@ def run(
             git_checkout.verify_clean(repo, rewritten, runner)
             base = f"{package.name}-{version.full}"
             checkout = staging / "checkout" / base
-            shutil.copytree(repo / "source", checkout / base, symlinks=True)
-            shutil.copytree(repo / ".git", checkout / ".git", symlinks=True)
+            checkout.mkdir(parents=True)
+            shutil.move(str(repo / "source"), checkout / base)
+            shutil.move(str(repo / ".git"), checkout / ".git")
             LOG.info("Staged git checkout: %s (HEAD %s)", checkout, head_sha)
     else:
         with log_stage("Create deterministic sdist and cache aliases"):

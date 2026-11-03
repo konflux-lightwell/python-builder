@@ -110,6 +110,21 @@ def test_source_git_checkout_path(tmp_path, git_repo, config_repo, caplog):
     assert (checkout / "PKG-INFO").read_text().endswith("Version: 1.0+rhlw.1\n")
     assert (results / "COMPUTED_VERSION").read_text() == "1.0+rhlw.1"
 
+    # The exported .git must be a real directory (not a symlink) containing the
+    # new v<computed> tag, and the scratch workdir/source/.git must be gone --
+    # proving the export is a move, not a second copy, of the retagged repo.
+    git_dir = output / "checkout/demo-1.0+rhlw.1/.git"
+    assert git_dir.is_dir()
+    assert not git_dir.is_symlink()
+    tags = subprocess.run(
+        ["git", "--git-dir", str(git_dir), "tag"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split()
+    assert "v1.0+rhlw.1" in tags
+    assert not (work / "source" / ".git").exists()
+
 
 def test_config_clone_credentials_not_in_arguments(tmp_path):
     secret = tmp_path / "secret"
