@@ -66,6 +66,47 @@ def backend_environment(
         yield environment
 
 
+def _fromager_common_args(settings: Path, overrides: Path, jobs: int | None) -> list[str | Path]:
+    """Assemble the Fromager CLI prefix shared by bootstrap/build-sequence/step calls.
+
+    Args:
+        settings: Directory containing resolved per-package Fromager YAML.
+        overrides: Builder-provided directory containing settings.yaml and patches.
+        jobs: Optional Fromager parallelism limit.
+
+    Returns:
+        The ``fromager`` executable followed by its settings/patches/jobs flags.
+    """
+    common: list[str | Path] = [
+        "fromager",
+        "--settings-file",
+        overrides / "settings.yaml",
+        "--settings-dir",
+        settings,
+    ]
+    if (overrides / "patches").is_dir():
+        common += ["--patches-dir", overrides / "patches"]
+    if jobs:
+        common += ["--jobs", str(jobs)]
+    return common
+
+
+def _repair_output_wheels(runner: Runner, wheels: Path, environment: dict[str, str]) -> None:
+    """Repair native wheels and update embedded SBOMs under a shared log stage.
+
+    Args:
+        runner: Adapter for auditwheel repair/show commands.
+        wheels: Fromager wheel download directory, modified in place.
+        environment: Backend environment inherited by auditwheel.
+
+    Raises:
+        TaskError: Shared-library basenames conflict, auditwheel fails, or wheel
+            metadata cannot be rewritten safely.
+    """
+    with log_stage("Repair native wheels and update embedded SBOMs"):
+        repair_wheels(runner, wheels, environment)
+
+
 def run_fromager(
     runner: Runner,
     output: Path,
@@ -96,17 +137,7 @@ def run_fromager(
         FileExistsError: The output directory already exists.
     """
     output.mkdir(parents=True, exist_ok=False)
-    common: list[str | Path] = [
-        "fromager",
-        "--settings-file",
-        overrides / "settings.yaml",
-        "--settings-dir",
-        settings,
-    ]
-    if (overrides / "patches").is_dir():
-        common += ["--patches-dir", overrides / "patches"]
-    if jobs:
-        common += ["--jobs", str(jobs)]
+    common = _fromager_common_args(settings, overrides, jobs)
     cache = ["--cache-wheel-server-url", wheel_server] if wheel_server else []
     env = environment | {"FROMAGER_SDISTS_REPO": str(sdists), "SOURCE_DATE_EPOCH": "0"}
     with log_stage("Fromager bootstrap and dependency resolution"):
@@ -119,8 +150,7 @@ def run_fromager(
     if not summary.is_file():
         raise TaskError("Fromager did not produce a build sequence summary")
     shutil.copyfile(summary, output / f"build-sequence-summary-{package.name}.json")
-    with log_stage("Repair native wheels and update embedded SBOMs"):
-        repair_wheels(runner, output / "wheels-repo/downloads", env)
+    _repair_output_wheels(runner, output / "wheels-repo/downloads", env)
 
 
 def run_fromager_checkout(
@@ -167,17 +197,7 @@ def run_fromager_checkout(
         raise TaskError(f"Checkout directory is missing: {checkout}")
     base = f"{package.name}-{computed}"
     shutil.copytree(checkout.parent, output / "work-dir" / base, symlinks=True)
-    common: list[str | Path] = [
-        "fromager",
-        "--settings-file",
-        overrides / "settings.yaml",
-        "--settings-dir",
-        settings,
-    ]
-    if (overrides / "patches").is_dir():
-        common += ["--patches-dir", overrides / "patches"]
-    if jobs:
-        common += ["--jobs", str(jobs)]
+    common = _fromager_common_args(settings, overrides, jobs)
     env = environment | {"SOURCE_DATE_EPOCH": "0"}
     with log_stage("Fromager checkout build sequence"):
         for step in ("prepare-build", "build-sdist", "build-wheel"):
@@ -198,8 +218,7 @@ def run_fromager_checkout(
         output / f"build-sequence-summary-{package.name}.json",
         [{"name": package.name, "version": computed, "prebuilt": False, "skipped": False}],
     )
-    with log_stage("Repair native wheels and update embedded SBOMs"):
-        repair_wheels(runner, wheels, env)
+    _repair_output_wheels(runner, wheels, env)
 
 
 def repair_wheels(runner: Runner, wheels: Path, environment: dict[str, str]) -> None:
