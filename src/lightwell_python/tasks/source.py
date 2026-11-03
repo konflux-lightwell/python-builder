@@ -148,14 +148,13 @@ def run(
             shutil.copytree(repo / "source", checkout / base, symlinks=True)
             shutil.copytree(repo / ".git", checkout / ".git", symlinks=True)
             LOG.info("Staged git checkout: %s (HEAD %s)", checkout, head_sha)
-            if version.commit:
-                (staging / ".commit").write_text(version.commit)
     else:
         with log_stage("Create deterministic sdist and cache aliases"):
             archive = create_sdist(repo / "source", staging, package, version.full)
             LOG.info("Created sdist: %s (%d bytes)", archive.name, archive.stat().st_size)
-            if version.commit:
-                (staging / ".commit").write_text(version.commit)
+
+    if version.commit:
+        (staging / ".commit").write_text(version.commit)
 
     with log_stage("Finalize sdist handoff and task results"):
         sdists_output.parent.mkdir(parents=True, exist_ok=True)
