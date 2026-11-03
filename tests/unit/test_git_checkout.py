@@ -71,3 +71,26 @@ def test_verify_clean_requires_fully_clean_tree_when_nothing_expected(git_repo):
 def test_verify_clean_passes_on_fully_clean_tree_when_nothing_expected(git_repo):
     repo, _ = git_repo
     verify_clean(repo, [], Runner())  # must not raise
+
+
+def test_verify_clean_handles_renamed_file(git_repo):
+    repo, git = git_repo
+    git("mv", "source/PKG-INFO", "source/PKG-INFO.renamed")
+    verify_clean(repo, [repo / "source/PKG-INFO.renamed"], Runner())  # must not raise
+
+
+def test_verify_clean_handles_path_with_space_and_non_ascii(git_repo):
+    repo, _ = git_repo
+    target = repo / "source/café data.txt"
+    target.write_text("surprise, but expected")
+    verify_clean(repo, [target], Runner())  # must not raise
+
+
+def test_verify_clean_resolves_symlinked_repo_root(tmp_path, git_repo):
+    repo, _ = git_repo
+    symlinked = tmp_path / "repo-link"
+    symlinked.symlink_to(repo)
+    target = repo / "source/PKG-INFO"
+    target.write_text("Name: demo\nVersion: 1.0+rhlw.1\n")
+    # rewritten paths come back resolved (via contained_file); repo itself is unresolved.
+    verify_clean(symlinked, [target.resolve()], Runner())  # must not raise

@@ -56,32 +56,42 @@ def verify_clean(repo: Path, rewritten: list[Path], runner: Runner) -> None:
     """Verify git status shows modifications only for paths in rewritten.
 
     Args:
-        repo: Git repository root.
+        repo: Git repository root. Resolved internally, so a symlinked working
+            tree does not need to match ``rewritten``'s own resolution.
         rewritten: List of absolute paths that are expected to be dirty.
         runner: Command executor.
 
     Raises:
         TaskError: Actual dirty files don't match expected set exactly.
     """
+    resolved_repo = repo.resolve()
     base = ["git", "-c", f"safe.directory={repo}", "-C", str(repo)]
 
     def git(*args: str) -> str:
         """Run a read-only git query scoped to this repository."""
         return runner.run([*base, *args], capture=True).rstrip("\n")
 
-    # Get git status output
-    status_output = git("status", "--porcelain")
-
-    # Parse status output into a set of repo-relative paths
+    # Use -z (NUL-separated, unquoted paths) so renames and quoted/non-ASCII
+    # paths parse correctly. A normal entry is one "XY PATH" field; a
+    # rename/copy entry (X or Y is 'R'/'C') is followed by a SEPARATE field
+    # holding the original path with no status prefix, which must be consumed
+    # rather than parsed as a new record.
+    status_output = git("status", "--porcelain=v1", "-z")
+    fields = status_output.split("\0")
     dirty_files = set()
-    for line in status_output.split("\n"):
-        if line.strip():
-            # Skip the 3-char status prefix (2 chars + space) to get the path
-            path_str = line[3:]
-            dirty_files.add(path_str)
+    index = 0
+    while index < len(fields):
+        record = fields[index]
+        index += 1
+        if not record:
+            continue
+        code, path = record[:2], record[3:]
+        dirty_files.add(path)
+        if "R" in code or "C" in code:
+            index += 1  # consume the rename/copy entry's original-path field
 
     # Convert expected rewritten paths to repo-relative strings
-    expected_dirty = {str(p.relative_to(repo)) for p in rewritten}
+    expected_dirty = {str(p.resolve().relative_to(resolved_repo)) for p in rewritten}
 
     # Check if they match exactly
     if dirty_files != expected_dirty:
