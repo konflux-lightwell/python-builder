@@ -196,6 +196,8 @@ save_build_sequence_summary() {
     fi
 }
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # Process each package
 for PACKAGE in "${PACKAGES[@]}"; do
     log "Processing package: ${PACKAGE}"
@@ -270,9 +272,7 @@ for PACKAGE in "${PACKAGES[@]}"; do
         safe_package_name=$(echo "$PACKAGE" | sed 's/[^a-zA-Z0-9._-]/_/g')
         saved_summary="build-sequence-summary-${safe_package_name}.json"
         log "Synthesizing build sequence summary for $PACKAGE to $saved_summary"
-        cat > "$saved_summary" <<EOF
-[{"name": "${NAME}", "version": "${VERSION}", "prebuilt": false, "skipped": false}]
-EOF
+        "$SCRIPT_DIR/write-checkout-build-summary" "$NAME" "$VERSION" "$saved_summary"
         BUILD_SEQUENCE_SUMMARIES+=("$saved_summary")
     else
         log "Resolving dependencies and creating build order"
@@ -353,8 +353,6 @@ EOF
     else
         log No manylinux wheels found, skipping auditwheel step
     fi
-
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
     # Add system library dependencies to Fromager SBOMs in manylinux wheels.
     # Uses auditwheel show to discover which system-provided shared libraries

@@ -15,7 +15,8 @@ from pathlib import Path
 from packaging.utils import parse_sdist_filename, parse_wheel_filename
 from packaging.version import Version
 
-from lightwell_python.runtime import Package, Runner, TaskError, log_stage, sha256, write_json
+from lightwell_python.build_summary import write_checkout_build_summary
+from lightwell_python.runtime import Package, Runner, TaskError, log_stage, sha256
 from lightwell_python.wheel_metadata import patch_wheel, system_libraries
 
 LOG = logging.getLogger(__name__)
@@ -214,9 +215,8 @@ def run_fromager_checkout(
     wheels = output / "wheels-repo/downloads"
     if not (wheels.is_dir() and any(wheels.glob("*.whl"))):
         raise TaskError("Fromager produced no wheel")
-    write_json(
-        output / f"build-sequence-summary-{package.name}.json",
-        [{"name": package.name, "version": computed, "prebuilt": False, "skipped": False}],
+    write_checkout_build_summary(
+        output / f"build-sequence-summary-{package.name}.json", package.name, computed
     )
     _repair_output_wheels(runner, wheels, env)
 

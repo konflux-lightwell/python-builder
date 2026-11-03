@@ -654,6 +654,7 @@ RUN cpython3.12 -m venv venv
 RUN venv/bin/python -m pip install -r requirements.txt --no-deps --no-cache-dir --require-hashes
 
 COPY scripts/* /usr/local/bin/
+COPY src/lightwell_python/build_summary.py /usr/local/bin/write-checkout-build-summary
 COPY overrides/settings.yaml /usr/local/share/fromager/overrides/settings.yaml
 COPY overrides/patches /usr/local/share/fromager/overrides/patches
 COPY overrides/package_plugins /src/package_plugins
