@@ -454,6 +454,7 @@ def run_wheels(tmp_path, wheel_input, make_wheel):
             build_type=BuildType.BACKPORT,
             sdists_dir=wheel_input,
             image="localhost:5000/org/repo:latest",
+            python_builder_image="localhost:5000/org/python-builder@sha256:" + "e" * 64,
             manifest_output=tmp_path / "manifest-output.json",
             registry=registry,
             runner=wheel_builder(make_wheel),

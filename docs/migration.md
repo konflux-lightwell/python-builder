@@ -81,6 +81,11 @@ The ingestion tag is `<package>/<version>` and the baseline tag is
 - Image digests come from the manifest ORAS exports at push time. Registry retries
   are bounded; build commands are not retried. Credentials remain in private
   temporary files and never enter command arguments or logs.
+- `python-fromager-build-wheels` emits a `PYTHON_BUILDER_IMAGE_REFERENCE` result
+  echoing the digest-pinned execution image (`--python-builder-image`). The release
+  policy derives its set of trusted build-input digests from the build task's
+  results, so surfacing the builder image this way lets it recognize the builder as
+  a trusted parameter without loosening the policy.
 
 ## Migration sources
 

@@ -13,6 +13,8 @@ from lightwell_python.tasks import sdist, source, wheels
 
 from .conftest import FakeRegistry, FakeRunner, wheel_builder
 
+BUILDER_IMAGE = "localhost:5000/org/python-builder@sha256:" + "e" * 64
+
 
 @pytest.fixture
 def config_repo(tmp_path, package_config):
@@ -163,6 +165,7 @@ def test_wheels_complete_task(tmp_path, wheel_input, make_wheel, caplog):
         build_type=BuildType.BACKPORT,
         sdists_dir=wheel_input,
         image="localhost:5000/org/repo:latest",
+        python_builder_image=BUILDER_IMAGE,
         manifest_output=tmp_path / "manifest-output.json",
         registry=registry,
         runner=runner,
@@ -172,6 +175,7 @@ def test_wheels_complete_task(tmp_path, wheel_input, make_wheel, caplog):
     assert [call[0] for call in registry.calls] == ["push", "sbom"]
     assert registry.calls[0][5] == ["demo-1.0-rhlw.1", "demo-1.0-rhlw.1-abcdef1"]
     assert (tmp_path / "results/IMAGE_REF").read_text() == registry.reference
+    assert (tmp_path / "results/PYTHON_BUILDER_IMAGE_REFERENCE").read_text() == BUILDER_IMAGE
     assert (work / "artifact/demo-1.0+rhlw.1.tar.gz").is_file()
     assert not (tmp_path / "results/MANIFEST_ARTIFACT").exists()
     assert read_json(tmp_path / "manifest-output.json") == read_json(work / "build-manifest.json")
@@ -221,6 +225,7 @@ def test_wheels_distribution_target_annotation(
         build_type=build_type,
         sdists_dir=wheel_input,
         image="localhost:5000/org/repo:latest",
+        python_builder_image=BUILDER_IMAGE,
         manifest_output=tmp_path / "manifest-output.json",
         registry=registry,
         runner=wheel_builder(make_wheel),
@@ -256,6 +261,7 @@ def test_wheels_do_not_publish_unauthorized_build(tmp_path, wheel_input, make_wh
             build_type=BuildType.BACKPORT,
             sdists_dir=wheel_input,
             image="registry.test/repo:latest",
+            python_builder_image=BUILDER_IMAGE,
             manifest_output=tmp_path / "manifest-output.json",
             registry=registry,
             runner=wheel_builder(make_wheel, unauthorized=True),
@@ -312,6 +318,7 @@ def test_failed_sbom_attachment_does_not_stage_manifest(tmp_path, wheel_input, m
             sdists_dir=wheel_input,
             manifest_output=tmp_path / "manifest.json",
             image="registry.test/demo:latest",
+            python_builder_image=BUILDER_IMAGE,
             registry=FailingRegistry(),
             runner=wheel_builder(make_wheel),
         )

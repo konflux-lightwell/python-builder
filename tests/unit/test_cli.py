@@ -39,6 +39,8 @@ from lightwell_python.runtime import TaskError
                 "1.0+rhlw.1",
                 "--manifest-output",
                 "staged-manifest.json",
+                "--python-builder-image",
+                "registry/python-builder@sha256:" + "e" * 64,
             ],
         ),
         (
@@ -160,6 +162,7 @@ def test_unknown_task():
                 "IMAGE": "registry/repo",
                 "COMPUTED_VERSION": "1.0+rhlw.1",
                 "MANIFEST_OUTPUT": "manifest.json",
+                "PYTHON_BUILDER_IMAGE": "registry/python-builder@sha256:" + "e" * 64,
                 "WHEEL_SERVER_URL": "https://example/wheels",
                 "JOBS": "4",
             },
@@ -246,6 +249,8 @@ WHEEL_REQUIRED_ARGS = [
     "1.0+rhlw.1",
     "--manifest-output",
     "manifest.json",
+    "--python-builder-image",
+    "registry/python-builder@sha256:" + "e" * 64,
 ]
 
 
