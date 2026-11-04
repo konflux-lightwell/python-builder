@@ -45,6 +45,10 @@ def retag(repo: Path, computed: str, runner: Runner) -> str:
 def verify_clean(repo: Path, rewritten: list[Path], runner: Runner) -> None:
     """Verify git status shows modifications only for paths in rewritten.
 
+    Untracked files also count as dirty here, not just modifications to
+    tracked ones: this is intentional, fail-closed behavior for a checkout
+    that must otherwise be pristine, not an oversight to relax later.
+
     Args:
         repo: Git repository root. Resolved internally, so a symlinked working
             tree does not need to match ``rewritten``'s own resolution.
