@@ -437,6 +437,36 @@ RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
     /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/build-ffmpeg.sh
 
 
+# libpq is built from the PostgreSQL source tree (client library only) and links
+# our source-built OpenSSL so psycopg2's bundled libpq supports TLS.
+FROM build_base AS build_libpq
+ARG OPENSSL_SHARED_PREFIX
+COPY --from=build_openssl ${OPENSSL_SHARED_PREFIX} ${OPENSSL_SHARED_PREFIX}
+RUN echo "${OPENSSL_SHARED_PREFIX}/lib" > /etc/ld.so.conf.d/00-openssl.conf && ldconfig
+COPY build_scripts/build-libpq.sh /opt/_internal/build_scripts/
+RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
+    export LIBPQ_VERSION=18.6 && \
+    export LIBPQ_HASH=555610c24d53e4316da5b7d3fc25c279d96856d5e0e23ee308c328c5fa881d9f && \
+    export LIBPQ_DOWNLOAD_URL=https://ftp.postgresql.org/pub/source/v${LIBPQ_VERSION} && \
+    export OPENSSL_PREFIX=${OPENSSL_SHARED_PREFIX} && \
+    /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/build-libpq.sh
+
+
+# GPGME plus its GnuPG dependencies (libgpg-error, libassuan); all three are
+# bundled into the gpg wheel, so they are version-pinned here.
+FROM build_base AS build_gpgme
+COPY build_scripts/build-gpgme.sh /opt/_internal/build_scripts/
+RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
+    export LIBGPG_ERROR_VERSION=1.61 && \
+    export LIBGPG_ERROR_HASH=7a85413f2bc354f4f8aa832b718af122e48965e9e0eb9012ee659c13c6385c93 && \
+    export LIBASSUAN_VERSION=3.0.2 && \
+    export LIBASSUAN_HASH=d2931cdad266e633510f9970e1a2f346055e351bb19f9b78912475b8074c36f6 && \
+    export GPGME_VERSION=2.2.0 && \
+    export GPGME_HASH=7160e80e84dafd00d956c84891c533bb7ab16a6a54fbe1574b2f3acf0496977b && \
+    export GPGME_DOWNLOAD_URL=https://gnupg.org/ftp/gcrypt && \
+    /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/build-gpgme.sh
+
+
 FROM --platform=${BUILDPLATFORM} ghcr.io/sigstore/cosign/cosign:v${MANYLINUX_COSIGN_VERSION} AS cosign-bin
 
 
@@ -536,6 +566,8 @@ COPY --from=build_openblas /manylinux-buildfs /
 COPY --from=build_libomp /manylinux-buildfs /
 COPY --from=build_arrow /manylinux-buildfs /
 COPY --from=build_ffmpeg /manylinux-buildfs /
+COPY --from=build_libpq /manylinux-buildfs /
+COPY --from=build_gpgme /manylinux-buildfs /
 
 
 FROM runtime_base
@@ -566,6 +598,8 @@ COPY --from=build_openblas /manylinux-rootfs /
 COPY --from=build_libomp /manylinux-rootfs /
 COPY --from=build_arrow /manylinux-rootfs /
 COPY --from=build_ffmpeg /manylinux-rootfs /
+COPY --from=build_libpq /manylinux-rootfs /
+COPY --from=build_gpgme /manylinux-rootfs /
 RUN find /opt/_internal -name '*.so' -printf '%h\n' | sort -u >> /etc/ld.so.conf.d/00-manylinux.conf && \
     ldconfig
 
@@ -587,6 +621,12 @@ RUN for dir in /opt/_internal/lib*/include /opt/_internal/openblas*/include /opt
         for lib in "$dir"/lib*.so; do \
             [ -f "$lib" ] && ln -sf "$lib" /usr/local/lib/; \
         done; \
+    done
+# pg_config and the gpg-error/gpgrt *-config helpers are build-time tools that
+# psycopg2 and gpg look for on PATH. The build-time COPY above only brings /opt,
+# so link them into /usr/local/bin (already on PATH) explicitly.
+RUN for tool in /opt/_internal/libpq*/bin/pg_config /opt/_internal/libgpgme*/bin/*-config; do \
+        [ -f "$tool" ] && ln -sf "$tool" /usr/local/bin/; \
     done
 COPY build_scripts /opt/_internal/build_scripts/
 RUN    --mount=type=bind,target=/build_cpython312,from=build_cpython312 \
