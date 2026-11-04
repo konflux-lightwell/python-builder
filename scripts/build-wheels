@@ -246,6 +246,10 @@ for PACKAGE in "${PACKAGES[@]}"; do
             exit 1
         fi
         base="${NAME}-${VERSION}"
+        if [ ! -d "$CHECKOUT_ROOT/$base" ]; then
+            echo "Error: --checkout-root missing inner content dir: ${CHECKOUT_ROOT}/${base}" >&2
+            exit 1
+        fi
 
         log "Staging checkout into work-dir/${base}"
         mkdir -p work-dir
