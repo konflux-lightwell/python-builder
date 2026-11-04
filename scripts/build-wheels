@@ -266,6 +266,14 @@ for PACKAGE in "${PACKAGES[@]}"; do
             fromager "${step_args[@]}"
         done
 
+        # fromager's "step build-wheel" only moves prior build output into
+        # wheels-repo/downloads as a side effect of starting its wheel server
+        # *before* building, not after: the wheel it just built is left behind
+        # in wheels-repo/build. fromager's own e2e test for "step" usage
+        # (e2e/test_build_steps.sh) does this same move manually; do it here too.
+        mkdir -p wheels-repo/downloads
+        find wheels-repo/build -maxdepth 1 -name '*.whl' -exec mv -t wheels-repo/downloads {} +
+
         if [ -z "$(find wheels-repo/downloads -maxdepth 1 -name '*.whl' -print -quit 2>/dev/null)" ]; then
             echo "Error: fromager produced no wheel for ${PACKAGE} under wheels-repo/downloads" >&2
             exit 1

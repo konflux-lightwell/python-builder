@@ -285,12 +285,18 @@ def _stage_checkout(tmp_path, base):
 
 
 def test_run_fromager_checkout_invokes_three_steps_and_synthesizes_summary(tmp_path, make_wheel):
+    """Matches real Fromager's "step" behavior: a built wheel lands in
+    wheels-repo/build, not wheels-repo/downloads -- only update_wheel_mirror()
+    moves it, and "step build-wheel" only calls that before building, not
+    after (see e2e/test_build_steps.sh in Fromager's own source, which does
+    the same `mv wheels-repo/build/*.whl wheels-repo/downloads/` by hand).
+    """
     calls = []
 
     def record(args, kwargs):
         calls.append(args)
         if "step" in args and args[args.index("step") + 1] == "build-wheel":
-            make_wheel(kwargs["cwd"] / "wheels-repo/downloads")
+            make_wheel(kwargs["cwd"] / "wheels-repo/build")
 
     runner = FakeRunner(record)
     inner = _stage_checkout(tmp_path, "demo-1.0+rhlw.1")
@@ -308,6 +314,8 @@ def test_run_fromager_checkout_invokes_three_steps_and_synthesizes_summary(tmp_p
     assert steps == ["prepare-build", "build-sdist", "build-wheel"]
     for call in step_calls:
         assert call[-2:] == ["demo", "1.0+rhlw.1"]
+    assert not list((tmp_path / "output/wheels-repo/build").glob("*.whl"))
+    assert list((tmp_path / "output/wheels-repo/downloads").glob("*.whl"))
     assert read_json(tmp_path / "output/build-sequence-summary-demo.json") == [
         {"name": "demo", "version": "1.0+rhlw.1", "prebuilt": False, "skipped": False}
     ]

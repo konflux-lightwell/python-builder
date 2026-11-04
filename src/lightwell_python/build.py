@@ -212,8 +212,17 @@ def run_fromager_checkout(
                 cwd=output,
                 env=env,
             )
+    # Fromager's "step build-wheel" only moves prior build output into
+    # wheels-repo/downloads as a side effect of starting its wheel server
+    # *before* building, not after: the wheel it just built is left behind in
+    # wheels-repo/build. Fromager's own e2e test for "step" usage
+    # (e2e/test_build_steps.sh) does this same move manually; do it here too.
+    wheels_build_dir = output / "wheels-repo/build"
     wheels = output / "wheels-repo/downloads"
-    if not (wheels.is_dir() and any(wheels.glob("*.whl"))):
+    wheels.mkdir(parents=True, exist_ok=True)
+    for wheel in sorted(wheels_build_dir.glob("*.whl")):
+        shutil.move(str(wheel), wheels / wheel.name)
+    if not any(wheels.glob("*.whl")):
         raise TaskError("Fromager produced no wheel")
     write_checkout_build_summary(
         output / f"build-sequence-summary-{package.name}.json", package.name, computed
