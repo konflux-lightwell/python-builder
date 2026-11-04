@@ -43,6 +43,7 @@ def run(
     sdists_dir: Path,
     manifest_output: Path,
     image: str,
+    python_builder_image: str,
     registry: Registry,
     runner: Runner,
     wheel_server: str = "",
@@ -63,14 +64,18 @@ def run(
 
     Args:
         workdir: Existing, isolated scratch directory for build outputs.
-        results: Tekton mount receiving IMAGE_URL, IMAGE_DIGEST, IMAGE_REF, and
-            SBOM_BLOB_URL. The create step owns MANIFEST_ARTIFACT.
+        results: Tekton mount receiving IMAGE_URL, IMAGE_DIGEST, IMAGE_REF,
+            SBOM_BLOB_URL, and PYTHON_BUILDER_IMAGE_REFERENCE. The create step
+            owns MANIFEST_ARTIFACT.
         package: Canonical primary distribution and upstream version.
         computed: Expected full version of the primary wheel.
         build_type: Version and dependency provenance policy.
         sdists_dir: Sdist/config tree restored by the preceding use step.
         manifest_output: New, stable build-manifest.json handoff path for create.
         image: Destination reference for the final wheels OCI image.
+        python_builder_image: Digest-pinned reference of the execution image this
+            build ran in, echoed back as a task result so the release policy
+            recognizes it as a trusted build input.
         registry: Adapter for final-image and SBOM publication.
         runner: Adapter for Fromager and auditwheel execution.
         wheel_server: Optional prebuilt-wheel cache URL; forbidden for Validated.
@@ -194,6 +199,7 @@ def run(
                 "IMAGE_DIGEST": reference.rsplit("@", 1)[1],
                 "IMAGE_REF": reference,
                 "SBOM_BLOB_URL": sbom_ref,
+                "PYTHON_BUILDER_IMAGE_REFERENCE": python_builder_image,
             },
         )
     LOG.info("Build manifest ready: %s; task results: %s", manifest_output, results)

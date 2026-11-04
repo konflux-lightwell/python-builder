@@ -92,6 +92,11 @@ spec:
       description: Full OCI reference (repo@digest) of the built wheels.
     - name: SBOM_BLOB_URL
       description: OCI reference for the attached SBOM blob.
+    - name: PYTHON_BUILDER_IMAGE_REFERENCE
+      description: >-
+        Digest-pinned reference of the execution image this build ran in, echoed
+        back so the release policy treats the builder image as a trusted build
+        input (trusted_parameters).
     - name: MANIFEST_ARTIFACT
       description: >-
         Trusted Artifact URI containing build-manifest.json staged by lightwell-build-wheels and
@@ -149,6 +154,7 @@ spec:
         - --ca-bundle=/mnt/trusted-ca/ca-bundle.crt
         - --build-type=$(params.BUILD_TYPE)
         - --computed-version=$(params.COMPUTED_VERSION)
+        - --python-builder-image=$(params.PYTHON_BUILDER_IMAGE)
         - --sdists-dir=/var/workdir/sdists-repo
         - --manifest-output=/var/workdir/build-manifest.json
         - --image=$(params.IMAGE)

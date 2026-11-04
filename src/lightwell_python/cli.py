@@ -103,6 +103,7 @@ def wheels_parser() -> argparse.ArgumentParser:
     _option(result, "build-type", choices=[mode.value for mode in BuildType], required=True)
     _option(result, "computed-version", dest="computed", required=True)
     _option(result, "manifest-output", type=Path, required=True)
+    _option(result, "python-builder-image", required=True)
     _option(result, "wheel-server-url", dest="wheel_server", default="")
     _option(result, "pulp-secret", type=Path, default=Path("/mnt/pulp-secret"))
     _option(result, "overrides", type=Path, default=Path("/usr/local/share/fromager/overrides"))
@@ -167,6 +168,7 @@ def _run_wheels(args: argparse.Namespace, context: TaskContext) -> None:
         sdists_dir=args.sdists_dir.resolve(),
         registry=Registry(context["runner"], args.auth_file),
         image=args.image,
+        python_builder_image=args.python_builder_image,
         manifest_output=args.manifest_output.resolve(),
         wheel_server=args.wheel_server,
         pulp_secret=args.pulp_secret,
