@@ -321,6 +321,64 @@ def test_run_fromager_checkout_invokes_three_steps_and_synthesizes_summary(tmp_p
     ]
 
 
+def test_run_fromager_checkout_defaults_wheel_server_to_pypi(tmp_path, make_wheel):
+    """An empty wheel_server must not mean "no index": `step` commands, unlike
+    bootstrap, never fall back to resolving build-system/backend dependencies
+    from PyPI themselves, so prepare-build/build-wheel need a real index or
+    they can only ever see their own empty local wheel server.
+    """
+    calls = []
+
+    def record(args, kwargs):
+        calls.append(args)
+        if "step" in args and args[args.index("step") + 1] == "build-wheel":
+            make_wheel(kwargs["cwd"] / "wheels-repo/build")
+
+    runner = FakeRunner(record)
+    inner = _stage_checkout(tmp_path, "demo-1.0+rhlw.1")
+    run_fromager_checkout(
+        runner,
+        tmp_path / "output",
+        inner,
+        tmp_path / "settings",
+        Package("demo", "1.0"),
+        "1.0+rhlw.1",
+        {},
+    )
+    step_calls = {c[c.index("step") + 1]: c for c in calls if "step" in c}
+    for step in ("prepare-build", "build-wheel"):
+        assert "--wheel-server-url" in step_calls[step]
+        idx = step_calls[step].index("--wheel-server-url")
+        assert step_calls[step][idx + 1] == "https://pypi.org/simple/"
+    assert "--wheel-server-url" not in step_calls["build-sdist"]
+
+
+def test_run_fromager_checkout_uses_given_wheel_server(tmp_path, make_wheel):
+    calls = []
+
+    def record(args, kwargs):
+        calls.append(args)
+        if "step" in args and args[args.index("step") + 1] == "build-wheel":
+            make_wheel(kwargs["cwd"] / "wheels-repo/build")
+
+    runner = FakeRunner(record)
+    inner = _stage_checkout(tmp_path, "demo-1.0+rhlw.1")
+    run_fromager_checkout(
+        runner,
+        tmp_path / "output",
+        inner,
+        tmp_path / "settings",
+        Package("demo", "1.0"),
+        "1.0+rhlw.1",
+        {},
+        wheel_server="https://cache.example.com/simple/",
+    )
+    step_calls = {c[c.index("step") + 1]: c for c in calls if "step" in c}
+    for step in ("prepare-build", "build-wheel"):
+        idx = step_calls[step].index("--wheel-server-url")
+        assert step_calls[step][idx + 1] == "https://cache.example.com/simple/"
+
+
 def test_run_fromager_checkout_missing_checkout_fails(tmp_path):
     """A missing checkout directory fails with TaskError, not a raw FileNotFoundError.
 

@@ -185,7 +185,14 @@ def run_fromager_checkout(
         package: Primary distribution being built.
         computed: Full version Fromager should build and tag the wheel with.
         environment: Backend environment, including any temporary credentials.
-        wheel_server: Optional cache URL; empty disables prebuilt-wheel lookup.
+        wheel_server: Optional prebuilt-wheel cache URL. Unlike ``run_fromager``'s
+            bootstrap/build-sequence path, an empty value here does *not* mean
+            "resolve from source instead" -- ``step`` commands never fall back to
+            resolving build-system/backend dependencies from PyPI the way
+            ``bootstrap`` does, so an empty cache leaves them with nothing to
+            install from at all. Empty falls back to the public PyPI index so a
+            Validated (no-cache) checkout build can still install its build-time
+            dependencies.
         overrides: Builder-provided directory containing settings.yaml and patches.
         jobs: Optional Fromager parallelism limit.
 
@@ -200,11 +207,15 @@ def run_fromager_checkout(
     shutil.copytree(checkout.parent, output / "work-dir" / base, symlinks=True)
     common = _fromager_common_args(settings, overrides, jobs)
     env = environment | {"SOURCE_DATE_EPOCH": "0"}
+    # See the wheel_server docstring above: "step" has no bootstrap-style PyPI
+    # fallback for build-system/backend dependencies, so it always needs a real
+    # index, not just an optional cache.
+    effective_wheel_server = wheel_server or "https://pypi.org/simple/"
     with log_stage("Fromager checkout build sequence"):
         for step in ("prepare-build", "build-sdist", "build-wheel"):
             wheel_option = (
-                ["--wheel-server-url", wheel_server]
-                if wheel_server and step in ("prepare-build", "build-wheel")
+                ["--wheel-server-url", effective_wheel_server]
+                if step in ("prepare-build", "build-wheel")
                 else []
             )
             runner.run(
