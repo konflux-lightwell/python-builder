@@ -195,17 +195,20 @@ def test_wheels_complete_task(tmp_path, wheel_input, make_wheel, caplog):
     [
         (BuildType.BACKPORT, "remediated"),
         (BuildType.NOVEL, "novel"),
+        (BuildType.SCRATCH, "scratch"),
     ],
 )
 def test_wheels_distribution_target_annotation(
     tmp_path, wheel_input, make_wheel, build_type, expected
 ):
-    """Backport publishes under remediated; Novel gets its own, not-yet-allowed target.
+    """Backport publishes under remediated; Novel and Scratch get their own targets.
 
     registry-lightwell-python-remediated-stage's lightwell_allowed_distribution_targets
-    policy only allows "remediated" (or "validated") today. Novel intentionally emits
-    "novel" instead of collapsing into "remediated", so it fails closed at Enterprise
-    Contract release validation until the policy is updated for the novel-fix workflow.
+    policy only allows "remediated" (or "validated") today. Novel and Scratch
+    intentionally emit their own targets instead of collapsing into "remediated", so
+    they fail closed at Enterprise Contract release validation. Scratch never releases,
+    so the policy never gates it, but the dedicated target keeps a scratch-only wheel
+    from being mistaken for a shippable artifact.
     """
     work = tmp_path / "task"
     work.mkdir()
@@ -232,10 +235,11 @@ def test_wheels_distribution_target_annotation(
         (BuildType.BACKPORT, "remediated"),
         (BuildType.NOVEL, "novel"),
         (BuildType.VALIDATED, "validated"),
+        (BuildType.SCRATCH, "scratch"),
     ],
 )
 def test_build_type_distribution_target(build_type, expected):
-    """BuildType.distribution_target maps Backport->remediated, Novel->novel (separate)."""
+    """distribution_target: Backport->remediated, Novel->novel, Scratch->scratch (separate)."""
     assert build_type.distribution_target == expected
 
 

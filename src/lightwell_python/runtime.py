@@ -76,6 +76,10 @@ class BuildType(StrEnum):
         rather than silently ship under the remediated target. Once the
         policy is updated to recognize "novel", those builds will start
         passing without a further code change here.
+        Scratch gets its own "scratch" target for the same fail-closed reason:
+        scratch builds skip release, so the policy never gates them, but a
+        dedicated target keeps a scratch-only wheel from ever being mistaken
+        for a shippable artifact if one reaches release validation.
         """
         if self is BuildType.VALIDATED:
             return "validated"
@@ -83,6 +87,8 @@ class BuildType(StrEnum):
             return "remediated"
         if self is BuildType.NOVEL:
             return "novel"
+        if self is BuildType.SCRATCH:
+            return "scratch"
         raise ValueError(f"No distribution-target mapping for build type: {self!r}")
 
 

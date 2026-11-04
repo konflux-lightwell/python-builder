@@ -64,7 +64,10 @@ The ingestion tag is `<package>/<version>` and the baseline tag is
   skips all Git lineage queries and stamps a fixed `upstream+rhlw.0`, so a
   build-config can be exercised without ingestion/baseline tags. Whether the
   rewrite actually landed is confirmed by the usual primary-wheel version check,
-  not by this task.
+  not by this task. Scratch wheels are annotated with the dedicated
+  `dev.lightwell.distribution-target` value `scratch`; scratch builds skip release
+  so the target is never gated, but a dedicated value keeps a scratch-only wheel
+  from being mistaken for a shippable artifact.
 - Missing/invalid build summaries, ambiguous sdists, and mismatched primary wheel
   filename, METADATA, or SPDX versions fail the task. A primary SBOM is required.
 - Wheel RECORD is regenerated as CSV with hashes. Only the root `.dist-info` is
