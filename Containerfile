@@ -467,6 +467,35 @@ RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
     /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/build-gpgme.sh
 
 
+# librdkafka is built from source and links our zlib, zstd and OpenSSL so
+# confluent-kafka's bundled librdkafka ships compression and TLS we control.
+FROM build_base AS build_librdkafka
+ARG OPENSSL_SHARED_PREFIX
+COPY --from=build_zlib /manylinux-buildfs /
+COPY --from=build_zstd /manylinux-buildfs /
+COPY --from=build_openssl ${OPENSSL_SHARED_PREFIX} ${OPENSSL_SHARED_PREFIX}
+RUN echo "${OPENSSL_SHARED_PREFIX}/lib" > /etc/ld.so.conf.d/00-openssl.conf && ldconfig
+COPY build_scripts/build-librdkafka.sh /opt/_internal/build_scripts/
+RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
+    export LIBRDKAFKA_VERSION=2.16.0 && \
+    export LIBRDKAFKA_HASH=e6b61de61d3282879a88e4ee3d9f634a8b05bf78a9198dfc25c4820c0c9ed231 && \
+    export LIBRDKAFKA_DOWNLOAD_URL=https://github.com/confluentinc/librdkafka/archive/refs/tags && \
+    export OPENSSL_PREFIX=${OPENSSL_SHARED_PREFIX} && \
+    /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/build-librdkafka.sh
+
+
+# HDF5 (C library + high-level API) is built from source and links our zlib, so
+# h5py's bundled libhdf5 uses a deflate filter we control.
+FROM build_base AS build_hdf5
+COPY --from=build_zlib /manylinux-buildfs /
+COPY build_scripts/build-hdf5.sh /opt/_internal/build_scripts/
+RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
+    export HDF5_VERSION=1.14.6 && \
+    export HDF5_HASH=e4defbac30f50d64e1556374aa49e574417c9e72c6b1de7a4ff88c4b1bea6e9b && \
+    export HDF5_DOWNLOAD_URL=https://github.com/HDFGroup/hdf5/releases/download/hdf5_1.14.6 && \
+    /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/build-hdf5.sh
+
+
 FROM --platform=${BUILDPLATFORM} ghcr.io/sigstore/cosign/cosign:v${MANYLINUX_COSIGN_VERSION} AS cosign-bin
 
 
@@ -568,6 +597,8 @@ COPY --from=build_arrow /manylinux-buildfs /
 COPY --from=build_ffmpeg /manylinux-buildfs /
 COPY --from=build_libpq /manylinux-buildfs /
 COPY --from=build_gpgme /manylinux-buildfs /
+COPY --from=build_librdkafka /manylinux-buildfs /
+COPY --from=build_hdf5 /manylinux-buildfs /
 
 
 FROM runtime_base
@@ -600,6 +631,8 @@ COPY --from=build_arrow /manylinux-rootfs /
 COPY --from=build_ffmpeg /manylinux-rootfs /
 COPY --from=build_libpq /manylinux-rootfs /
 COPY --from=build_gpgme /manylinux-rootfs /
+COPY --from=build_librdkafka /manylinux-rootfs /
+COPY --from=build_hdf5 /manylinux-rootfs /
 RUN find /opt/_internal -name '*.so' -printf '%h\n' | sort -u >> /etc/ld.so.conf.d/00-manylinux.conf && \
     ldconfig
 
@@ -610,13 +643,13 @@ COPY --from=merged_buildfs /usr/local/lib/cmake /usr/local/lib/cmake
 COPY --from=merged_buildfs /usr/local/include /usr/local/include
 # Create symlinks in standard paths so build systems that don't use pkg-config
 # (e.g. PyYAML's setup.py) can find our source-built headers and libraries
-RUN for dir in /opt/_internal/lib*/include /opt/_internal/openblas*/include /opt/_internal/zlib*/include /opt/_internal/bzip2*/include /opt/_internal/libomp*/include /opt/_internal/freetype*/include /opt/_internal/lcms2*/include /opt/_internal/openjpeg*/include /opt/_internal/aom*/include /opt/_internal/brotli*/include /opt/_internal/harfbuzz*/include /opt/_internal/ffmpeg*/include; do \
+RUN for dir in /opt/_internal/lib*/include /opt/_internal/openblas*/include /opt/_internal/zlib*/include /opt/_internal/bzip2*/include /opt/_internal/libomp*/include /opt/_internal/freetype*/include /opt/_internal/lcms2*/include /opt/_internal/openjpeg*/include /opt/_internal/aom*/include /opt/_internal/brotli*/include /opt/_internal/harfbuzz*/include /opt/_internal/ffmpeg*/include /opt/_internal/hdf5*/include; do \
         [ -d "$dir" ] || continue; \
         for item in "$dir"/*; do \
             ln -sf "$item" /usr/local/include/; \
         done; \
     done && \
-    for dir in /opt/_internal/lib*/lib /opt/_internal/openblas*/lib /opt/_internal/zlib*/lib /opt/_internal/bzip2*/lib /opt/_internal/libomp*/lib /opt/_internal/freetype*/lib /opt/_internal/lcms2*/lib /opt/_internal/openjpeg*/lib /opt/_internal/aom*/lib /opt/_internal/brotli*/lib /opt/_internal/harfbuzz*/lib /opt/_internal/ffmpeg*/lib; do \
+    for dir in /opt/_internal/lib*/lib /opt/_internal/openblas*/lib /opt/_internal/zlib*/lib /opt/_internal/bzip2*/lib /opt/_internal/libomp*/lib /opt/_internal/freetype*/lib /opt/_internal/lcms2*/lib /opt/_internal/openjpeg*/lib /opt/_internal/aom*/lib /opt/_internal/brotli*/lib /opt/_internal/harfbuzz*/lib /opt/_internal/ffmpeg*/lib /opt/_internal/hdf5*/lib; do \
         [ -d "$dir" ] || continue; \
         for lib in "$dir"/lib*.so; do \
             [ -f "$lib" ] && ln -sf "$lib" /usr/local/lib/; \
@@ -676,6 +709,9 @@ RUN set -e && \
 COPY tests /opt/_internal/tests/
 
 ENV SSL_CERT_FILE=/opt/_internal/certs.pem
+# h5py discovers our source-built HDF5 through HDF5_DIR; the stable symlink points
+# at the versioned prefix so this never needs editing on a version bump.
+ENV HDF5_DIR=/opt/_internal/hdf5
 
 WORKDIR /src
 # perl-IPC-Cmd is a build tool (not bundled in wheels)
