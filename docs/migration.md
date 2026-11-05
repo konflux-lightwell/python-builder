@@ -55,6 +55,8 @@ The ingestion tag is `<package>/<version>` and the baseline tag is
 
 ## Deliberate corrections
 
+- Fromager bootstrap, wheel builds, and repair use a fixed `SOURCE_DATE_EPOCH` of
+  `315532800` (1980-01-01 UTC), preserving reproducibility with ZIP-compatible dates.
 - JSON replaces executable config handoffs; config repository scripts are not run.
 - Archives preserve executable bits and safe symlinks with normalized timestamps
   and ownership. Their bytes may differ from the original Bash implementation.

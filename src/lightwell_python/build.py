@@ -140,7 +140,8 @@ def run_fromager(
     output.mkdir(parents=True, exist_ok=False)
     common = _fromager_common_args(settings, overrides, jobs)
     cache = ["--cache-wheel-server-url", wheel_server] if wheel_server else []
-    env = environment | {"FROMAGER_SDISTS_REPO": str(sdists), "SOURCE_DATE_EPOCH": "0"}
+    # Wheel ZIP timestamps must be at least 1980-01-01, even for reproducible builds.
+    env = environment | {"FROMAGER_SDISTS_REPO": str(sdists), "SOURCE_DATE_EPOCH": "315532800"}
     with log_stage("Fromager bootstrap and dependency resolution"):
         runner.run([*common, "bootstrap", package.requirement, *cache], cwd=output, env=env)
     with log_stage("Fromager build sequence"):
@@ -206,7 +207,7 @@ def run_fromager_checkout(
     base = f"{package.name}-{computed}"
     shutil.copytree(checkout.parent, output / "work-dir" / base, symlinks=True)
     common = _fromager_common_args(settings, overrides, jobs)
-    env = environment | {"SOURCE_DATE_EPOCH": "0"}
+    env = environment | {"SOURCE_DATE_EPOCH": "315532800"}
     # See the wheel_server docstring above: "step" has no bootstrap-style PyPI
     # fallback for build-system/backend dependencies, so it always needs a real
     # index, not just an optional cache.

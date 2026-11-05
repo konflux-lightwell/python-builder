@@ -294,6 +294,10 @@ def test_run_fromager_checkout_invokes_three_steps_and_synthesizes_summary(tmp_p
     calls = []
 
     def record(args, kwargs):
+        if "step" in args:
+            timestamp = datetime.fromtimestamp(int(kwargs["env"]["SOURCE_DATE_EPOCH"]), UTC)
+            info = zipfile.ZipInfo("demo.py", timestamp.timetuple()[:6])
+            assert info.date_time == (1980, 1, 1, 0, 0, 0)
         calls.append(args)
         if "step" in args and args[args.index("step") + 1] == "build-wheel":
             make_wheel(kwargs["cwd"] / "wheels-repo/build")
@@ -412,6 +416,32 @@ def test_run_fromager_checkout_no_wheel_fails(tmp_path):
             "1.0+rhlw.1",
             {},
         )
+
+
+def test_fromager_uses_reproducible_zip_compatible_timestamps(tmp_path, make_wheel):
+    (tmp_path / "sdists").mkdir()
+    runner = wheel_builder(make_wheel)
+    build = runner.callback
+
+    def check_timestamp(args, kwargs):
+        if args[0] == "fromager":
+            timestamp = datetime.fromtimestamp(int(kwargs["env"]["SOURCE_DATE_EPOCH"]), UTC)
+            info = zipfile.ZipInfo("demo.py", timestamp.timetuple()[:6])
+            assert info.date_time == (1980, 1, 1, 0, 0, 0)
+        return build(args, kwargs)
+
+    runner.callback = check_timestamp
+    environment = {"SOURCE_DATE_EPOCH": "0"}
+    run_fromager(
+        runner,
+        tmp_path / "output",
+        tmp_path / "sdists",
+        tmp_path / "settings",
+        Package("demo", "1.0"),
+        environment,
+    )
+    assert environment == {"SOURCE_DATE_EPOCH": "0"}
+    assert sum(args[0] == "fromager" for args, _ in runner.calls) == 2
 
 
 def attribution(models: str, date: str = "2026-10-27T08:05:09Z") -> dict:
@@ -737,6 +767,7 @@ def test_checkout_mode_builds_and_publishes_wheel(tmp_path, checkout_input, make
         build_type=BuildType.BACKPORT,
         sdists_dir=checkout_input,
         image="localhost:5000/org/repo:latest",
+        python_builder_image="localhost:5000/org/python-builder@sha256:" + "e" * 64,
         manifest_output=tmp_path / "manifest-output.json",
         registry=registry,
         runner=FakeRunner(build),
