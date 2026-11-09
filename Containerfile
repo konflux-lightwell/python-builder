@@ -90,6 +90,13 @@ RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
     export LIBXCRYPT_DOWNLOAD_URL=https://github.com/besser82/libxcrypt/releases/download && \
     /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/install-libxcrypt.sh
 
+COPY build_scripts/install-bison.sh /opt/_internal/build_scripts/
+RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
+    export BISON_ROOT=bison-3.8.2 && \
+    export BISON_HASH=06c9e13bdf7eb24d4ceb6b59205a4f67c2c7e7213119644430fe82fbd14a0abb && \
+    export BISON_DOWNLOAD_URL=https://ftp.gnu.org/gnu/bison && \
+    /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/install-bison.sh
+
 
 FROM runtime_base AS build_base
 COPY build_scripts/install-build-packages.sh /opt/_internal/build_scripts/

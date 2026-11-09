@@ -40,7 +40,14 @@ else
 	CONFIGURE_OPTS+=(--without-openssl)
 fi
 
-./configure "${CONFIGURE_OPTS[@]}" \
+# PostgreSQL's top-level ./configure hard-requires both bison and flex,
+# regardless of what's actually built afterwards. bison is genuine -- building
+# src/interfaces/libpq pulls in submake-generated-headers, which needs a real
+# bison to produce src/backend/parser/gram.h (see install-bison.sh) -- but
+# flex is only ever checked here, never invoked: generated-headers doesn't
+# depend on any flex-generated file (scan.c is a backend-only, non-libpq
+# build target), so a stub satisfies the check without needing a real flex.
+./configure "${CONFIGURE_OPTS[@]}" FLEX=true \
 	CPPFLAGS="${LIBPQ_CPPFLAGS}" CFLAGS="${MANYLINUX_CFLAGS}" LDFLAGS="${LIBPQ_LDFLAGS}" > /dev/null
 
 # Build only the client library and pg_config; libpq's Makefile pulls in the
