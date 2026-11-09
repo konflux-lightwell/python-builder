@@ -251,6 +251,52 @@ def test_wheels_complete_task(tmp_path, wheel_input, make_wheel, caplog):
     assert "Build manifest ready:" in caplog.text
 
 
+@pytest.mark.parametrize("wheel_server", ["", "https://packages.redhat.com/simple/"])
+def test_validated_wheels_accept_optional_cache(tmp_path, wheel_input, make_wheel, wheel_server):
+    work = tmp_path / "task"
+    work.mkdir()
+    registry = FakeRegistry()
+
+    def build(args, kwargs):
+        if args[0] == "fromager" and "build-sequence" in args:
+            output = kwargs["cwd"]
+            make_wheel(output / "wheels-repo/downloads", version="1.0")
+            write_json(
+                output / "work-dir/build-sequence-summary.json",
+                [
+                    {"name": "demo", "version": "1.0", "prebuilt": False},
+                    {"name": "dep", "version": "2.0", "prebuilt": True},
+                ],
+            )
+
+    runner = FakeRunner(build)
+    wheels.run(
+        workdir=work,
+        results=tmp_path / "results",
+        package=Package("demo", "1.0"),
+        computed="1.0",
+        build_type=BuildType.VALIDATED,
+        sdists_dir=wheel_input,
+        image="registry.test/repo:latest",
+        python_builder_image=BUILDER_IMAGE,
+        manifest_output=tmp_path / "manifest-output.json",
+        registry=registry,
+        runner=runner,
+        wheel_server=wheel_server,
+    )
+    for args, _ in runner.calls:
+        if args[0] == "fromager" and any(step in args for step in ("bootstrap", "build-sequence")):
+            if wheel_server:
+                assert args[args.index("--cache-wheel-server-url") + 1] == wheel_server
+            else:
+                assert "--cache-wheel-server-url" not in args
+    assert [call[0] for call in registry.calls] == ["push", "sbom"]
+    assert read_json(tmp_path / "manifest-output.json") == {
+        "produced": [{"name": "demo", "version": "1.0"}],
+        "cached": [{"name": "dep", "version": "2.0"}],
+    }
+
+
 @pytest.mark.parametrize(
     "build_type,expected",
     [

@@ -50,11 +50,8 @@ def build_manifest(output: Path, build_type: BuildType, allowed: frozenset[str])
             prebuilt = entry.get("prebuilt", False)
             if not isinstance(skipped, bool) or not isinstance(prebuilt, bool):
                 raise TaskError("Build summary skipped/prebuilt values must be booleans")
-            if build_type == BuildType.VALIDATED:
-                if not skipped:
-                    produced.add((name, version))
-            elif not skipped and not prebuilt:
-                if name not in allowed:
+            if not skipped and not prebuilt:
+                if build_type != BuildType.VALIDATED and name not in allowed:
                     raise TaskError(f"Unauthorized source build: {name}")
                 produced.add((name, version))
             else:

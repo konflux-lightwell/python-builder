@@ -84,7 +84,7 @@ def run(
             recognizes it as a trusted build input.
         registry: Adapter for final-image and SBOM publication.
         runner: Adapter for Fromager and auditwheel execution.
-        wheel_server: Optional prebuilt-wheel cache URL; forbidden for Validated.
+        wheel_server: Optional prebuilt-wheel cache URL for any build type.
         pulp_secret: Optional mounted Pulp credentials for the build backend.
         image_expires: Optional Quay expiration annotation for the final image.
         overrides: Builder-provided Fromager settings and patch directory.
@@ -102,8 +102,6 @@ def run(
     if manifest_output.exists():
         raise TaskError(f"Manifest output already exists: {manifest_output}")
     version_counts(package, computed, build_type)
-    if build_type == BuildType.VALIDATED and wheel_server:
-        raise TaskError("Validated builds cannot use a prebuilt wheel server")
     if ai_assisted:
         validate_ai_models(ai_models)
 

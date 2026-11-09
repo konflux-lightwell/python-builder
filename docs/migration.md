@@ -35,7 +35,7 @@ while `IMAGE_DIGEST` identifies the published OCI manifest.
 | --- | --- | --- |
 | Backport | `upstream+rhlw.B`; B counts ingestion→HEAD | Source-build allowlist and optional wheel cache |
 | Novel | `upstream+rhlw.B.n.N`; B counts ingestion→baseline, N counts baseline→HEAD | Same as Backport |
-| Validated | Upstream version | Full dependency closure; wheel cache disabled |
+| Validated | Upstream version | Full dependency closure and optional wheel cache |
 | Scratch | `upstream+rhlw.0`; fixed, no Git lineage queried | Same as Backport |
 
 The ingestion tag is `<package>/<version>` and the baseline tag is
@@ -54,6 +54,10 @@ The ingestion tag is `<package>/<version>` and the baseline tag is
   hashes in `sdist-transformation.json`.
 
 ## Deliberate corrections
+
+- Validated builds accept an optional prebuilt wheel server. Cached or skipped
+  dependencies are recorded as cached in the wheel manifest; source builds
+  retain the upstream version and the full dependency-closure policy.
 
 - Fromager bootstrap, wheel builds, and repair use a fixed `SOURCE_DATE_EPOCH` of
   `315532800` (1980-01-01 UTC), preserving reproducibility with ZIP-compatible dates.

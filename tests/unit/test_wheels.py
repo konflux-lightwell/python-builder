@@ -791,3 +791,23 @@ def test_checkout_mode_builds_and_publishes_wheel(tmp_path, checkout_input, make
     assert staged_git.is_dir()
     assert not staged_git.is_symlink()
     assert (work / "output/work-dir" / base / base).is_dir()
+
+
+@pytest.mark.parametrize("build_type", list(BuildType))
+def test_manifest_classifies_prebuilt_and_skipped_dependencies(tmp_path, build_type):
+    write_json(
+        tmp_path / "build-sequence-summary-demo.json",
+        [
+            {"name": "demo", "version": "1.0"},
+            {"name": "prebuilt-dep", "version": "2.0", "prebuilt": True},
+            {"name": "skipped-dep", "version": "3.0", "skipped": True},
+            {"name": "demo", "version": "1.0", "prebuilt": True},
+        ],
+    )
+    assert build_manifest(tmp_path, build_type, frozenset({"demo"})) == {
+        "produced": [{"name": "demo", "version": "1.0"}],
+        "cached": [
+            {"name": "prebuilt-dep", "version": "2.0"},
+            {"name": "skipped-dep", "version": "3.0"},
+        ],
+    }
