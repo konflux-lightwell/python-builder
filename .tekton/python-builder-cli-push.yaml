@@ -13,7 +13,7 @@ metadata:
     appstudio.openshift.io/component: python-builder-cli
     pipelines.appstudio.openshift.io/type: build
   name: python-builder-cli-on-push
-  namespace: lightwell-python-tenant
+  namespace: lightwell-catalog-tenant
 spec:
   params:
   - name: git-url
@@ -21,7 +21,7 @@ spec:
   - name: revision
     value: '{{revision}}'
   - name: output-image
-    value: quay.io/redhat-user-workloads/lightwell-python-tenant/python-builder/python-builder-cli:{{revision}}
+    value: quay.io/redhat-user-workloads/lightwell-catalog-tenant/python-builder/python-builder-cli:{{revision}}
   - name: dockerfile
     value: Containerfile.cli
   pipelineSpec:
