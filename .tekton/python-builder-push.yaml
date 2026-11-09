@@ -24,7 +24,7 @@ spec:
   - name: output-image
     value: quay.io/redhat-user-workloads/lightwell-catalog-tenant/python-builder/python-builder:{{revision}}
   - name: dockerfile
-    value: Dockerfile
+    value: Containerfile
   pipelineSpec:
     description: |
       This pipeline is ideal for building container images from a Containerfile while maintaining trust after pipeline customization.
@@ -538,8 +538,22 @@ spec:
       optional: true
     - name: netrc
       optional: true
+  taskRunSpecs:
+  - pipelineTaskName: build-container
+    timeout: 3h
+    stepSpecs:
+    - name: build
+      computeResources:
+        requests:
+          cpu: '8'
+          memory: 12Gi
+        limits:
+          cpu: '8'
+          memory: 12Gi
   taskRunTemplate:
     serviceAccountName: build-pipeline-python-builder
+  timeouts:
+    pipeline: 3h30m0s
   workspaces:
   - name: git-auth
     secret:
