@@ -32,7 +32,7 @@ spec:
   - name: build-platforms
     value:
     - linux/x86_64
-    - linux/arm64
+    - linux-m2xlarge/arm64
     # The Lightwell cluster does not support s390x or ppc64le yet.
     # - linux/s390x
     # - linux/ppc64le
