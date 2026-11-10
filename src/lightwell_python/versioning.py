@@ -142,7 +142,10 @@ def rewrite_metadata(
         updates = _plan_default_rewrites(source, package, computed)
 
     for path, text in updates.items():
-        path.write_text(text, encoding="utf-8")
+        if path.suffix == ".py":
+            path.write_bytes(text.encode("utf-8", "surrogateescape"))
+        else:
+            path.write_text(text, encoding="utf-8")
     if not updates:
         logging.getLogger(__name__).warning(
             "No version declarations changed; wheel metadata will be verified"
@@ -185,7 +188,14 @@ def _plan_default_rewrites(source: Path, package: Package, computed: str) -> dic
         ):
             continue
         path = contained_file(source, str(candidate.relative_to(source)))
-        original = path.read_text(encoding="utf-8")
+        # Python sources may legitimately use non-UTF-8 encodings (PEP 263).
+        # Preserve their bytes with surrogateescape so the heuristic can scan for
+        # an ASCII ``__version__`` declaration without rejecting the whole build.
+        # Authoritative metadata files remain strict UTF-8.
+        if candidate.suffix == ".py":
+            original = path.read_bytes().decode("utf-8", "surrogateescape")
+        else:
+            original = path.read_text(encoding="utf-8")
         if name in {"PKG-INFO", "METADATA"}:
             header, separator, body = original.partition("\n\n")
             header = re.sub(
