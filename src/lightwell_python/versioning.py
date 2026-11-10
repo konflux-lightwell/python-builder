@@ -130,7 +130,9 @@ def rewrite_metadata(
     Raises:
         TaskError: The source is missing, a target escapes it, or an explicit rule
             does not match or fails to write the computed version.
-        UnicodeError: A metadata file cannot be decoded as UTF-8.
+        UnicodeError: An explicit rewrite target or a non-Python metadata
+            file cannot be decoded as UTF-8. Default Python-source scans use
+            ``surrogateescape`` so non-UTF-8 PEP 263 sources remain readable.
     """
     if not source.is_dir():
         raise TaskError("source/ directory is missing")
@@ -141,11 +143,12 @@ def rewrite_metadata(
     else:
         updates = _plan_default_rewrites(source, package, computed)
 
-    for path, text in updates.items():
-        if path.suffix == ".py":
-            path.write_bytes(text.encode("utf-8", "surrogateescape"))
+    for path, update in updates.items():
+        if update.python_source:
+            with path.open("w", encoding="utf-8", errors="surrogateescape", newline=None) as handle:
+                handle.write(update.text)
         else:
-            path.write_text(text, encoding="utf-8")
+            path.write_text(update.text, encoding="utf-8")
     if not updates:
         logging.getLogger(__name__).warning(
             "No version declarations changed; wheel metadata will be verified"
@@ -153,14 +156,23 @@ def rewrite_metadata(
     return list(updates)
 
 
+@dataclass(frozen=True, slots=True)
+class _PlannedRewrite:
+    """A validated text update plus the policy needed to write it back."""
+
+    text: str
+    python_source: bool = False
+
+
 def _plan_configured_rewrites(
     source: Path, package: Package, computed: str, rules: list[dict[str, str]]
-) -> dict[Path, str]:
+) -> dict[Path, _PlannedRewrite]:
     """Validate configured replacements and collect changes without writing files."""
-    updates: dict[Path, str] = {}
+    updates: dict[Path, _PlannedRewrite] = {}
     for rule in rules:
         path = contained_file(source, rule["path"])
-        original = updates.get(path, path.read_text(encoding="utf-8"))
+        existing = updates.get(path)
+        original = existing.text if existing else path.read_text(encoding="utf-8")
         text, count = re.subn(
             rule["pattern"],
             expand(rule["replacement"], package, computed),
@@ -169,13 +181,15 @@ def _plan_configured_rewrites(
         )
         if not count or computed not in text:
             raise TaskError(f"Configured rewrite did not write computed version: {rule['path']}")
-        updates[path] = text
+        updates[path] = _PlannedRewrite(text)
     return updates
 
 
-def _plan_default_rewrites(source: Path, package: Package, computed: str) -> dict[Path, str]:
+def _plan_default_rewrites(
+    source: Path, package: Package, computed: str
+) -> dict[Path, _PlannedRewrite]:
     """Collect changes to authoritative metadata and Python __version__ assignments."""
-    updates: dict[Path, str] = {}
+    updates: dict[Path, _PlannedRewrite] = {}
     old = re.escape(package.version)
     for candidate in sorted(source.rglob("*")):
         if candidate.is_dir():
@@ -189,11 +203,14 @@ def _plan_default_rewrites(source: Path, package: Package, computed: str) -> dic
             continue
         path = contained_file(source, str(candidate.relative_to(source)))
         # Python sources may legitimately use non-UTF-8 encodings (PEP 263).
-        # Preserve their bytes with surrogateescape so the heuristic can scan for
-        # an ASCII ``__version__`` declaration without rejecting the whole build.
+        # Use surrogateescape so the heuristic can scan for an ASCII
+        # ``__version__`` declaration without rejecting the whole build, while
+        # retaining the universal-newline handling of the original text-mode read.
         # Authoritative metadata files remain strict UTF-8.
-        if candidate.suffix == ".py":
-            original = path.read_bytes().decode("utf-8", "surrogateescape")
+        python_source = candidate.suffix == ".py"
+        if python_source:
+            with path.open("r", encoding="utf-8", errors="surrogateescape", newline=None) as handle:
+                original = handle.read()
         else:
             original = path.read_text(encoding="utf-8")
         if name in {"PKG-INFO", "METADATA"}:
@@ -205,7 +222,7 @@ def _plan_default_rewrites(source: Path, package: Package, computed: str) -> dic
                 flags=re.MULTILINE,
             )
             text = header + separator + body
-        elif candidate.suffix == ".py":
+        elif python_source:
             text = re.sub(
                 r"""(^[ \t]*__version__[ \t]*=[ \t]*["'])""" + old + r"""(["'])""",
                 lambda m: m[1] + computed + m[2],
@@ -215,7 +232,7 @@ def _plan_default_rewrites(source: Path, package: Package, computed: str) -> dic
         else:
             text = _rewrite_sections(original, old, computed, name == "pyproject.toml")
         if text != original:
-            updates[path] = text
+            updates[path] = _PlannedRewrite(text, python_source=python_source)
     return updates
 
 

@@ -88,6 +88,61 @@ def test_default_rewrite_handles_non_utf8_python_source(tmp_path):
     assert '[project]\nversion = "1.0+rhlw.1"' in (source / "pyproject.toml").read_text()
 
 
+def test_default_rewrite_uses_scan_suffix_for_python_encoding(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    target = source / "data.txt"
+    target.write_bytes(b'__version__ = "1.0"\nTOTO = "Caf\xe9"\n')
+    (source / "version.py").symlink_to(target)
+
+    changes = rewrite_metadata(source, Package("demo", "1.0"), "1.0+rhlw.1", [])
+
+    assert changes == [target]
+    assert b'__version__ = "1.0+rhlw.1"' in target.read_bytes()
+    assert b"Caf\xe9" in target.read_bytes()
+
+
+@pytest.mark.parametrize("newline", [b"\r", b"\r\n"])
+def test_default_rewrite_normalizes_python_newlines(tmp_path, newline):
+    source = tmp_path / "source"
+    source.mkdir()
+    python_source = source / "version.py"
+    python_source.write_bytes(b'__version__ = "1.0"' + newline)
+
+    changes = rewrite_metadata(source, Package("demo", "1.0"), "1.0+rhlw.1", [])
+
+    assert changes == [python_source]
+    assert python_source.read_bytes() == b'__version__ = "1.0+rhlw.1"\n'
+
+
+def test_explicit_rewrite_requires_utf8_python_source(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    target = source / "version.py"
+    original = b'__version__ = "1.0"\nTOTO = "Caf\xe9"\n'
+    target.write_bytes(original)
+    rules = [{"path": "version.py", "pattern": "1.0", "replacement": "{COMPUTED_VERSION}"}]
+
+    with pytest.raises(UnicodeDecodeError):
+        rewrite_metadata(source, Package("demo", "1.0"), "1.0+rhlw.1", rules)
+
+    assert target.read_bytes() == original
+
+
+def test_default_rewrite_leaves_non_matching_non_utf8_python_source_unchanged(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "pyproject.toml").write_text('[project]\nversion = "1.0"\n')
+    fixture = source / "latin1.py"
+    original = b'# coding: latin_1\nTOTO = "Caf\xe9"\n'
+    fixture.write_bytes(original)
+
+    changes = rewrite_metadata(source, Package("demo", "1.0"), "1.0+rhlw.1", [])
+
+    assert changes == [source / "pyproject.toml"]
+    assert fixture.read_bytes() == original
+
+
 def test_explicit_rewrite_is_validated_before_writes(tmp_path):
     target = tmp_path / "version.txt"
     target.write_text("1.0")

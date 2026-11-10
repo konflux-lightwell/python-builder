@@ -66,10 +66,11 @@ The ingestion tag is `<package>/<version>` and the baseline tag is
   and ownership. Their bytes may differ from the original Bash implementation.
 - Metadata rewrites validate paths and matches before writing. Default TOML/INI
   edits target project/metadata sections only.
-- Default Python-source version scans preserve non-UTF-8 source bytes with
-  ``surrogateescape``. This keeps PEP 263 fixtures intact while still allowing an
-  ASCII ``__version__`` declaration to be rewritten; explicit rewrite rules
-  continue to require strict UTF-8.
+- Default Python-source version scans use ``surrogateescape`` and retain
+  universal-newline text handling. Non-UTF-8 PEP 263 sources can be scanned and
+  rewritten without rejecting the build, while changed Python files keep the
+  original newline-normalization behavior. Explicit rewrite rules continue to
+  require strict UTF-8.
 - Scratch is a reversioning-check build mode with no orchestrator equivalent: it
   skips all Git lineage queries and stamps a fixed `upstream+rhlw.0`, so a
   build-config can be exercised without ingestion/baseline tags. Whether the
