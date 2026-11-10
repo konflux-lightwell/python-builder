@@ -74,6 +74,16 @@ cp -r "${RUSTUP_HOME}" /manylinux-rootfs"${PREFIX}"/
 mkdir -p /manylinux-rootfs"${PREFIX}"/cargo/{registry,git}
 chmod -R g+w /manylinux-rootfs"${PREFIX}"/cargo/{registry,git}/
 
+# A crate can pin a different toolchain via rust-toolchain.toml, which makes
+# rustup install it at build time. That writes to tmp, downloads, toolchains and
+# update-hashes, and updates settings.toml. Not recursive: toolchains/ only needs
+# to be writable so a new toolchain directory can be created, and -R here would
+# make already-installed toolchain binaries writable too.
+mkdir -p /manylinux-rootfs"${PREFIX}"/rustup/{tmp,downloads,toolchains,update-hashes}
+chmod g+w /manylinux-rootfs"${PREFIX}"/rustup \
+          /manylinux-rootfs"${PREFIX}"/rustup/{tmp,downloads,toolchains,update-hashes}
+chmod g+w /manylinux-rootfs"${PREFIX}"/rustup/settings.toml
+
 # Create wrapper scripts that set environment variables
 mkdir -p /manylinux-rootfs/usr/local/bin
 cat > /manylinux-rootfs/usr/local/bin/rustc <<EOF
