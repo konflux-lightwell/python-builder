@@ -73,6 +73,21 @@ def test_rewrite_authoritative_sections(tmp_path):
     assert (tmp_path / "PKG-INFO").read_text().endswith("\n\nVersion: 1.0\n")
 
 
+def test_default_rewrite_handles_non_utf8_python_source(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "pyproject.toml").write_text('[project]\nversion = "1.0"\n')
+    fixture = source / "latin1.py"
+    fixture.write_bytes(b'# coding: latin_1\n__version__ = "1.0"\nTOTO = ("Caf\xe9", "Caf\xe9")\n')
+
+    changes = rewrite_metadata(source, Package("demo", "1.0"), "1.0+rhlw.1", [])
+
+    assert set(changes) == {source / "pyproject.toml", fixture}
+    assert b'__version__ = "1.0+rhlw.1"' in fixture.read_bytes()
+    assert b"Caf\xe9" in fixture.read_bytes()
+    assert '[project]\nversion = "1.0+rhlw.1"' in (source / "pyproject.toml").read_text()
+
+
 def test_explicit_rewrite_is_validated_before_writes(tmp_path):
     target = tmp_path / "version.txt"
     target.write_text("1.0")
