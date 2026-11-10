@@ -1,5 +1,5 @@
 # default to latest supported policy, x86_64
-ARG BASEIMAGE=registry.access.redhat.com/ubi8/ubi@sha256:c322aa68f2d630b36b9faab64094357f62720be2f56f7099376ca2d6c4fe389b
+ARG BASEIMAGE=registry.access.redhat.com/ubi8/ubi@sha256:122a1f5c1ea12daa5a409f8fd98150f87922f379b5e7d9055e45e2c1ee1260c2
 ARG POLICY=manylinux_2_28
 # buildah --platform sets TARGETARCH (amd64/arm64/s390x/ppc64le). AUDITWHEEL_ARCH
 # / PLAT are baked from TARGETARCH via runtime_base_packages_<arch> stages below
