@@ -55,6 +55,10 @@ The ingestion tag is `<package>/<version>` and the baseline tag is
 
 ## Deliberate corrections
 
+- Build-config validation accepts optional package rename `aliases`, matching
+  calunga-python: a list of unique, nonempty strings, including an empty list.
+  Aliases are metadata and do not change the builder's primary package identity.
+
 - Validated builds accept an optional prebuilt wheel server. Cached or skipped
   dependencies are recorded as cached in the wheel manifest; source builds
   retain the upstream version and the full dependency-closure policy.
