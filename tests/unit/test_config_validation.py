@@ -50,6 +50,30 @@ def has(errors: list[str], substr: str) -> bool:
     return any(substr in e for e in errors)
 
 
+@pytest.mark.parametrize("aliases", [[], ["git"], ["pypdf", "pdf-lib"]])
+def test_aliases_valid(tmp_path, aliases):
+    config = baseline()
+    config["aliases"] = aliases
+    assert run(tmp_path, config) == []
+
+
+@pytest.mark.parametrize(
+    ("aliases", "error"),
+    [
+        ("pypdf", "aliases must be a list, got str"),
+        (None, "aliases must be a list, got NoneType"),
+        ([123], "aliases[0] must be a non-empty string"),
+        ([""], "aliases[0] must be a non-empty string"),
+        (["  "], "aliases[0] must be a non-empty string"),
+        (["pypdf", "pypdf"], "aliases: duplicate entry 'pypdf'"),
+    ],
+)
+def test_aliases_invalid(tmp_path, aliases, error):
+    config = baseline()
+    config["aliases"] = aliases
+    assert run(tmp_path, config) == [error]
+
+
 # --- baseline -------------------------------------------------------------
 
 

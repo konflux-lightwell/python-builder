@@ -35,6 +35,7 @@ OPTIONAL_TOP_LEVEL_FIELDS = (
     "version_configs",
     "allowed_artifacts",
     "canonical_source",
+    "aliases",
 )
 TOP_LEVEL_FIELDS = REQUIRED_TOP_LEVEL_FIELDS + OPTIONAL_TOP_LEVEL_FIELDS
 VERSION_CONFIG_FIELDS = (
@@ -143,6 +144,8 @@ def _validate_top_level(config: dict, path: Path, errors: list[str]) -> None:
         _validate_allowed_artifacts(config["allowed_artifacts"], "allowed_artifacts", errors)
     if "canonical_source" in config:
         _validate_canonical_source(config["canonical_source"], "canonical_source", errors)
+    if "aliases" in config:
+        _validate_aliases(config["aliases"], "aliases", errors)
 
 
 def _validate_versions(config: dict, errors: list[str]) -> None:
@@ -242,6 +245,23 @@ def _validate_allowed_artifacts(allowed, loc: str, errors: list[str]) -> None:
         expected = canonicalize_name(item)
         if item != expected:
             errors.append(f"{iloc} ('{item}') is not PEP 503 canonicalized — expected '{expected}'")
+            continue
+        if item in seen:
+            errors.append(f"{loc}: duplicate entry '{item}'")
+        else:
+            seen.add(item)
+
+
+def _validate_aliases(aliases, loc: str, errors: list[str]) -> None:
+    """Require unique, nonempty strings for optional package rename aliases."""
+    if not isinstance(aliases, list):
+        errors.append(f"{loc} must be a list, got {type(aliases).__name__}")
+        return
+    seen: set[str] = set()
+    for i, item in enumerate(aliases):
+        iloc = f"{loc}[{i}]"
+        if not isinstance(item, str) or not item.strip():
+            errors.append(f"{iloc} must be a non-empty string")
             continue
         if item in seen:
             errors.append(f"{loc}: duplicate entry '{item}'")
