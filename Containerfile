@@ -584,6 +584,84 @@ COPY --from=cosign-bin /ko-app/cosign /usr/local/bin/cosign
 COPY build_scripts/build-cpython.sh /opt/_internal/build_scripts/
 
 
+FROM build_cpython AS build_cpython39
+COPY --from=build_zlib /manylinux-buildfs /
+COPY --from=build_bzip2 /manylinux-buildfs /
+COPY --from=build_libpng /manylinux-buildfs /
+COPY --from=build_libtiff /manylinux-buildfs /
+COPY --from=build_brotli /manylinux-buildfs /
+COPY --from=build_harfbuzz /manylinux-buildfs /
+COPY --from=build_freetype /manylinux-buildfs /
+COPY --from=build_libwebp /manylinux-buildfs /
+COPY --from=build_lcms2 /manylinux-buildfs /
+COPY --from=build_openjpeg /manylinux-buildfs /
+COPY --from=build_aom /manylinux-buildfs /
+COPY --from=build_libavif /manylinux-buildfs /
+COPY --from=build_libjpeg_turbo /manylinux-buildfs /
+COPY --from=build_libyaml /manylinux-buildfs /
+COPY --from=build_libxml2 /manylinux-buildfs /
+COPY --from=build_libxslt /manylinux-buildfs /
+COPY --from=build_libffi /manylinux-buildfs /
+COPY --from=build_openblas /manylinux-buildfs /
+COPY --from=build_libomp /manylinux-buildfs /
+COPY --from=build_arrow /manylinux-buildfs /
+ARG MANYLINUX_DISABLE_CLANG_FOR_CPYTHON
+RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
+    /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/build-cpython.sh lukasz@langa.pl https://github.com/login/oauth 3.9.21
+
+
+FROM build_cpython AS build_cpython310
+COPY --from=build_zlib /manylinux-buildfs /
+COPY --from=build_bzip2 /manylinux-buildfs /
+COPY --from=build_libpng /manylinux-buildfs /
+COPY --from=build_libtiff /manylinux-buildfs /
+COPY --from=build_brotli /manylinux-buildfs /
+COPY --from=build_harfbuzz /manylinux-buildfs /
+COPY --from=build_freetype /manylinux-buildfs /
+COPY --from=build_libwebp /manylinux-buildfs /
+COPY --from=build_lcms2 /manylinux-buildfs /
+COPY --from=build_openjpeg /manylinux-buildfs /
+COPY --from=build_aom /manylinux-buildfs /
+COPY --from=build_libavif /manylinux-buildfs /
+COPY --from=build_libjpeg_turbo /manylinux-buildfs /
+COPY --from=build_libyaml /manylinux-buildfs /
+COPY --from=build_libxml2 /manylinux-buildfs /
+COPY --from=build_libxslt /manylinux-buildfs /
+COPY --from=build_libffi /manylinux-buildfs /
+COPY --from=build_openblas /manylinux-buildfs /
+COPY --from=build_libomp /manylinux-buildfs /
+COPY --from=build_arrow /manylinux-buildfs /
+ARG MANYLINUX_DISABLE_CLANG_FOR_CPYTHON
+RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
+    /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/build-cpython.sh pablogsal@python.org https://accounts.google.com 3.10.17
+
+
+FROM build_cpython AS build_cpython311
+COPY --from=build_zlib /manylinux-buildfs /
+COPY --from=build_bzip2 /manylinux-buildfs /
+COPY --from=build_libpng /manylinux-buildfs /
+COPY --from=build_libtiff /manylinux-buildfs /
+COPY --from=build_brotli /manylinux-buildfs /
+COPY --from=build_harfbuzz /manylinux-buildfs /
+COPY --from=build_freetype /manylinux-buildfs /
+COPY --from=build_libwebp /manylinux-buildfs /
+COPY --from=build_lcms2 /manylinux-buildfs /
+COPY --from=build_openjpeg /manylinux-buildfs /
+COPY --from=build_aom /manylinux-buildfs /
+COPY --from=build_libavif /manylinux-buildfs /
+COPY --from=build_libjpeg_turbo /manylinux-buildfs /
+COPY --from=build_libyaml /manylinux-buildfs /
+COPY --from=build_libxml2 /manylinux-buildfs /
+COPY --from=build_libxslt /manylinux-buildfs /
+COPY --from=build_libffi /manylinux-buildfs /
+COPY --from=build_openblas /manylinux-buildfs /
+COPY --from=build_libomp /manylinux-buildfs /
+COPY --from=build_arrow /manylinux-buildfs /
+ARG MANYLINUX_DISABLE_CLANG_FOR_CPYTHON
+RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
+    /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/build-cpython.sh pablogsal@python.org https://accounts.google.com 3.11.12
+
+
 FROM build_cpython AS build_cpython312
 COPY --from=build_zlib /manylinux-buildfs /
 COPY --from=build_bzip2 /manylinux-buildfs /
@@ -608,6 +686,58 @@ COPY --from=build_arrow /manylinux-buildfs /
 ARG MANYLINUX_DISABLE_CLANG_FOR_CPYTHON
 RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
     /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/build-cpython.sh thomas@python.org https://accounts.google.com 3.12.12
+
+
+FROM build_cpython AS build_cpython313
+COPY --from=build_zlib /manylinux-buildfs /
+COPY --from=build_bzip2 /manylinux-buildfs /
+COPY --from=build_libpng /manylinux-buildfs /
+COPY --from=build_libtiff /manylinux-buildfs /
+COPY --from=build_brotli /manylinux-buildfs /
+COPY --from=build_harfbuzz /manylinux-buildfs /
+COPY --from=build_freetype /manylinux-buildfs /
+COPY --from=build_libwebp /manylinux-buildfs /
+COPY --from=build_lcms2 /manylinux-buildfs /
+COPY --from=build_openjpeg /manylinux-buildfs /
+COPY --from=build_aom /manylinux-buildfs /
+COPY --from=build_libavif /manylinux-buildfs /
+COPY --from=build_libjpeg_turbo /manylinux-buildfs /
+COPY --from=build_libyaml /manylinux-buildfs /
+COPY --from=build_libxml2 /manylinux-buildfs /
+COPY --from=build_libxslt /manylinux-buildfs /
+COPY --from=build_libffi /manylinux-buildfs /
+COPY --from=build_openblas /manylinux-buildfs /
+COPY --from=build_libomp /manylinux-buildfs /
+COPY --from=build_arrow /manylinux-buildfs /
+ARG MANYLINUX_DISABLE_CLANG_FOR_CPYTHON
+RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
+    /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/build-cpython.sh thomas@python.org https://accounts.google.com 3.13.1
+
+
+FROM build_cpython AS build_cpython314
+COPY --from=build_zlib /manylinux-buildfs /
+COPY --from=build_bzip2 /manylinux-buildfs /
+COPY --from=build_libpng /manylinux-buildfs /
+COPY --from=build_libtiff /manylinux-buildfs /
+COPY --from=build_brotli /manylinux-buildfs /
+COPY --from=build_harfbuzz /manylinux-buildfs /
+COPY --from=build_freetype /manylinux-buildfs /
+COPY --from=build_libwebp /manylinux-buildfs /
+COPY --from=build_lcms2 /manylinux-buildfs /
+COPY --from=build_openjpeg /manylinux-buildfs /
+COPY --from=build_aom /manylinux-buildfs /
+COPY --from=build_libavif /manylinux-buildfs /
+COPY --from=build_libjpeg_turbo /manylinux-buildfs /
+COPY --from=build_libyaml /manylinux-buildfs /
+COPY --from=build_libxml2 /manylinux-buildfs /
+COPY --from=build_libxslt /manylinux-buildfs /
+COPY --from=build_libffi /manylinux-buildfs /
+COPY --from=build_openblas /manylinux-buildfs /
+COPY --from=build_libomp /manylinux-buildfs /
+COPY --from=build_arrow /manylinux-buildfs /
+ARG MANYLINUX_DISABLE_CLANG_FOR_CPYTHON
+RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
+    /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/build-cpython.sh hugo@python.org https://github.com/login/oauth 3.14.0
 
 
 FROM scratch AS merged_buildfs
@@ -699,7 +829,12 @@ RUN for tool in /opt/_internal/libpq*/bin/pg_config /opt/_internal/libgpgme*/bin
         [ -f "$tool" ] && ln -sf "$tool" /usr/local/bin/; \
     done
 COPY build_scripts /opt/_internal/build_scripts/
-RUN    --mount=type=bind,target=/build_cpython312,from=build_cpython312 \
+RUN    --mount=type=bind,target=/build_cpython39,from=build_cpython39 \
+    --mount=type=bind,target=/build_cpython310,from=build_cpython310 \
+    --mount=type=bind,target=/build_cpython311,from=build_cpython311 \
+    --mount=type=bind,target=/build_cpython312,from=build_cpython312 \
+    --mount=type=bind,target=/build_cpython313,from=build_cpython313 \
+    --mount=type=bind,target=/build_cpython314,from=build_cpython314 \
     --mount=type=bind,target=/build_cpython_base,from=build_cpython \
     mkdir -p /opt/_internal && \
     cp -rf /build_cpython*/opt/_internal/cpython* /opt/_internal/ && \
