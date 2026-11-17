@@ -105,7 +105,12 @@ class BuildConfig:
         """Write per-package Fromager YAML for this build.
 
         PURL metadata records both upstream and computed versions. A changelog entry
-        forces a rebuild. The stored config settings are copied before modification.
+        forces a rebuild. The download_source destination filename is pinned to the
+        name create_sdist() already writes into the pre-placed sdist cache, so Fromager
+        finds our version-rewritten archive instead of deriving a cache filename from
+        the upstream index URL's extension (which may not be .tar.gz, e.g. zip-sdist
+        packages such as h11 <= 0.7.0 -- see LWLP-5506). The stored config settings are
+        copied before modification.
 
         Args:
             path: YAML destination; missing parent directories are created.
@@ -113,13 +118,20 @@ class BuildConfig:
             computed: Expected version of the built wheel.
 
         Raises:
-            TaskError: PURL/changelog settings have incompatible types.
+            TaskError: PURL/changelog/download_source settings have incompatible types.
         """
         settings = copy.deepcopy(self.settings)
         purl = settings.setdefault("purl", {})
         changelog = settings.setdefault("changelog", {})
-        if not isinstance(purl, dict) or not isinstance(changelog, dict):
-            raise TaskError("Fromager purl and changelog settings must be mappings")
+        download_source = settings.setdefault("download_source", {})
+        if (
+            not isinstance(purl, dict)
+            or not isinstance(changelog, dict)
+            or not isinstance(download_source, dict)
+        ):
+            raise TaskError(
+                "Fromager purl, changelog, and download_source settings must be mappings"
+            )
         purl.update(
             version=computed, upstream=f"pkg:pypi/{package.name}@{quote(package.version, safe='')}"
         )
@@ -127,6 +139,9 @@ class BuildConfig:
         if not isinstance(entries, list):
             raise TaskError("Fromager changelog entries must be lists")
         entries.append(f"Lightwell build for {package.requirement}")
+        download_source.setdefault(
+            "destination_filename", "${canonicalized_name}-${version}.tar.gz"
+        )
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(yaml.safe_dump(settings, sort_keys=False), encoding="utf-8")
 

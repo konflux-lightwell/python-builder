@@ -491,3 +491,74 @@ def test_canonical_source_version_match_without_override_falls_back_to_package_d
     write_json(path, package_config)
     config = BuildConfig.load(path, Package("demo", "1.0"))
     assert config.canonical_source == {"type": "pypi-sdist"}
+
+
+def test_render_settings_pins_download_source_destination_filename(tmp_path, package_config):
+    """LWLP-5506: force Fromager onto the pre-placed sdist regardless of the
+
+    upstream index's advertised extension (e.g. zip-sdist packages like h11 <= 0.7.0),
+    instead of deriving a cache filename from the resolved download URL.
+    """
+    import yaml
+
+    from lightwell_python.config import BuildConfig
+
+    path = tmp_path / "demo.json"
+    write_json(path, package_config)
+    config = BuildConfig.load(path, Package("demo", "1.0"))
+
+    settings_path = tmp_path / "demo.yaml"
+    config.render_settings(settings_path, Package("demo", "1.0"), "1.0+rhlw.1")
+
+    rendered = yaml.safe_load(settings_path.read_text())
+    assert rendered["download_source"] == {
+        "destination_filename": "${canonicalized_name}-${version}.tar.gz"
+    }
+
+
+def test_render_settings_respects_existing_download_source_override(tmp_path, package_config):
+    """A build config that already overrides download_source (e.g. for a package
+
+    fetched from an alternate source such as a GitHub release) keeps its own
+    settings rather than being clobbered by the LWLP-5506 default.
+    """
+    import yaml
+
+    from lightwell_python.config import BuildConfig
+
+    package_config["version_configs"] = {
+        "1.0": {
+            "fromager_settings": {
+                "download_source": {
+                    "url": "https://example.test/demo-1.0.tar.gz",
+                    "destination_filename": "demo-custom.tar.gz",
+                }
+            }
+        }
+    }
+    path = tmp_path / "demo.json"
+    write_json(path, package_config)
+    config = BuildConfig.load(path, Package("demo", "1.0"))
+
+    settings_path = tmp_path / "demo.yaml"
+    config.render_settings(settings_path, Package("demo", "1.0"), "1.0+rhlw.1")
+
+    rendered = yaml.safe_load(settings_path.read_text())
+    assert rendered["download_source"] == {
+        "url": "https://example.test/demo-1.0.tar.gz",
+        "destination_filename": "demo-custom.tar.gz",
+    }
+
+
+def test_render_settings_rejects_non_mapping_download_source(tmp_path, package_config):
+    from lightwell_python.config import BuildConfig
+
+    package_config["version_configs"] = {
+        "1.0": {"fromager_settings": {"download_source": "not-a-mapping"}}
+    }
+    path = tmp_path / "demo.json"
+    write_json(path, package_config)
+    config = BuildConfig.load(path, Package("demo", "1.0"))
+
+    with pytest.raises(TaskError, match="download_source"):
+        config.render_settings(tmp_path / "demo.yaml", Package("demo", "1.0"), "1.0+rhlw.1")
