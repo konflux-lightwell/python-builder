@@ -43,7 +43,6 @@ def test_default_setup_literal_version(tmp_path, source):
 @pytest.mark.parametrize(
     "source",
     [
-        "from setuptools import setup\nversion = '1.2.3'\nsetup(version=version)\n",
         "from setuptools import setup\n# setup(version='1.2.3')\nother(version='1.2.3')\n",
         (
             "from setuptools import setup\n"

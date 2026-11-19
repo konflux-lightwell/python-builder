@@ -69,10 +69,7 @@ The ingestion tag is `<package>/<version>` and the baseline tag is
 - Archives preserve executable bits and safe symlinks with normalized timestamps
   and ownership. Their bytes may differ from the original Bash implementation.
 - Metadata rewrites validate paths and matches before writing. Default TOML/INI
-  edits target project/metadata sections only. Root `setup.py` files also support
-  literal `version=` keywords in imported setuptools/distutils `setup` calls,
-  including aliases. Dynamic expressions still require explicit configuration;
-  setup scripts are parsed without being executed.
+  edits target project/metadata sections only.
 - Default Python-source version scans use ``surrogateescape`` and retain
   universal-newline text handling. Non-UTF-8 PEP 263 sources can be scanned and
   rewritten without rejecting the build, while changed Python files keep the
