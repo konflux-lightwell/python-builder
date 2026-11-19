@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import ast
+import io
 import logging
 import re
+import tokenize
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -185,6 +188,53 @@ def _plan_configured_rewrites(
     return updates
 
 
+def _rewrite_setup_version(text: str, upstream: str, computed: str) -> str:
+    """Rewrite literal version keywords in imported packaging setup calls without execution."""
+    original = text
+    try:
+        raw = text.encode("utf-8", errors="surrogateescape")
+        encoding, _ = tokenize.detect_encoding(io.BytesIO(raw).readline)
+        text = raw.decode(encoding)
+        tree = ast.parse(text)
+    except (SyntaxError, UnicodeError, LookupError):
+        return original
+    calls: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module in {"setuptools", "distutils.core"}:
+            calls.update(
+                alias.asname or alias.name for alias in node.names if alias.name == "setup"
+            )
+        elif isinstance(node, ast.Import):
+            calls.update(
+                (alias.asname or alias.name) + ".setup"
+                for alias in node.names
+                if alias.name in {"setuptools", "distutils.core"}
+            )
+    lines = text.encode("utf-8").splitlines(keepends=True)
+    edits = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or ast.unparse(node.func) not in calls:
+            continue
+        for keyword in node.keywords:
+            value = keyword.value
+            if (
+                keyword.arg != "version"
+                or not isinstance(value, ast.Constant)
+                or value.value != upstream
+            ):
+                continue
+            assert value.end_lineno is not None and value.end_col_offset is not None
+            start = sum(map(len, lines[: value.lineno - 1])) + value.col_offset
+            end = sum(map(len, lines[: value.end_lineno - 1])) + value.end_col_offset
+            literal = ast.get_source_segment(text, value) or ""
+            quote = '"' if literal.startswith('"') else "'"
+            edits.append((start, end, (quote + computed + quote).encode("utf-8")))
+    encoded = text.encode("utf-8")
+    for start, end, replacement in sorted(edits, reverse=True):
+        encoded = encoded[:start] + replacement + encoded[end:]
+    return encoded.decode("utf-8").encode(encoding).decode("utf-8", errors="surrogateescape")
+
+
 def _plan_default_rewrites(
     source: Path, package: Package, computed: str
 ) -> dict[Path, _PlannedRewrite]:
@@ -231,6 +281,8 @@ def _plan_default_rewrites(
             )
         else:
             text = _rewrite_sections(original, old, computed, name == "pyproject.toml")
+        if candidate == source / "setup.py":
+            text = _rewrite_setup_version(text, package.version, computed)
         if text != original:
             updates[path] = _PlannedRewrite(text, python_source=python_source)
     return updates
