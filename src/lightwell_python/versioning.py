@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import ast
+import io
 import logging
 import re
+import tokenize
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -114,8 +118,9 @@ def rewrite_metadata(
     """Plan and apply package version metadata updates.
 
     Explicit rules replace the default heuristic. Without rules, updates target
-    metadata headers, Python __version__ assignments, and project/metadata sections
-    in TOML/INI files. All replacements are validated before any writes start;
+    metadata headers, plain VERSION files, Python __version__ assignments, setup.py
+    version arguments, and project/metadata sections in TOML/INI files. All
+    replacements are validated before any writes start;
     filesystem write errors can still leave a partially updated scratch tree.
 
     Args:
@@ -185,10 +190,97 @@ def _plan_configured_rewrites(
     return updates
 
 
+def _setup_version_variables(tree: ast.Module) -> dict[str, ast.Constant]:
+    """Find module-level literal variables with exactly one visible binding."""
+    bindings: Counter[str] = Counter()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            bindings[node.id] += 1
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                bindings[alias.asname or alias.name.split(".")[0]] += 1
+        elif isinstance(node, ast.arg):
+            bindings[node.arg] += 1
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            bindings[node.name] += 1
+    variables = {}
+    value: ast.expr | None
+    for statement in tree.body:
+        if isinstance(statement, ast.Assign) and len(statement.targets) == 1:
+            target, value = statement.targets[0], statement.value
+        elif isinstance(statement, ast.AnnAssign):
+            target, value = statement.target, statement.value
+        else:
+            continue
+        if (
+            isinstance(target, ast.Name)
+            and bindings[target.id] == 1
+            and isinstance(value, ast.Constant)
+        ):
+            variables[target.id] = value
+    return variables
+
+
+def _rewrite_setup_version(text: str, upstream: str, computed: str) -> str:
+    """Rewrite literal version keywords or their single-assignment variables without execution."""
+    original = text
+    try:
+        raw = text.encode("utf-8", errors="surrogateescape")
+        encoding, _ = tokenize.detect_encoding(io.BytesIO(raw).readline)
+        text = raw.decode(encoding)
+        tree = ast.parse(text)
+    except (SyntaxError, UnicodeError, LookupError):
+        return original
+    calls: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module in {"setuptools", "distutils.core"}:
+            calls.update(
+                alias.asname or alias.name for alias in node.names if alias.name == "setup"
+            )
+        elif isinstance(node, ast.Import):
+            calls.update(
+                (alias.asname or alias.name) + ".setup"
+                for alias in node.names
+                if alias.name in {"setuptools", "distutils.core"}
+            )
+    variables = _setup_version_variables(tree)
+    lines = text.encode("utf-8").splitlines(keepends=True)
+    edits: dict[tuple[int, int], bytes] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or ast.unparse(node.func) not in calls:
+            continue
+        for keyword in node.keywords:
+            value = keyword.value
+            if isinstance(value, ast.Name):
+                variable = variables.get(value.id)
+                if variable is None or (variable.lineno, variable.col_offset) >= (
+                    node.lineno,
+                    node.col_offset,
+                ):
+                    continue
+                value = variable
+            if (
+                keyword.arg != "version"
+                or not isinstance(value, ast.Constant)
+                or value.value != upstream
+            ):
+                continue
+            assert value.end_lineno is not None and value.end_col_offset is not None
+            start = sum(map(len, lines[: value.lineno - 1])) + value.col_offset
+            end = sum(map(len, lines[: value.end_lineno - 1])) + value.end_col_offset
+            literal = ast.get_source_segment(text, value) or ""
+            quote = '"' if literal.startswith('"') else "'"
+            edits[start, end] = (quote + computed + quote).encode("utf-8")
+    encoded = text.encode("utf-8")
+    for (start, end), replacement in sorted(edits.items(), reverse=True):
+        encoded = encoded[:start] + replacement + encoded[end:]
+    return encoded.decode("utf-8").encode(encoding).decode("utf-8", errors="surrogateescape")
+
+
 def _plan_default_rewrites(
     source: Path, package: Package, computed: str
 ) -> dict[Path, _PlannedRewrite]:
-    """Collect changes to authoritative metadata and Python __version__ assignments."""
+    """Collect changes to metadata, plain VERSION files, and Python version declarations."""
     updates: dict[Path, _PlannedRewrite] = {}
     old = re.escape(package.version)
     for candidate in sorted(source.rglob("*")):
@@ -196,7 +288,7 @@ def _plan_default_rewrites(
             continue
         name = candidate.name
         if (
-            name not in {"PKG-INFO", "METADATA"}
+            name not in {"PKG-INFO", "METADATA", "VERSION"}
             and candidate.suffix != ".py"
             and candidate not in {source / "pyproject.toml", source / "setup.cfg"}
         ):
@@ -211,9 +303,18 @@ def _plan_default_rewrites(
         if python_source:
             with path.open("r", encoding="utf-8", errors="surrogateescape", newline=None) as handle:
                 original = handle.read()
+        elif name == "VERSION":
+            with path.open("r", encoding="utf-8", newline="") as handle:
+                original = handle.read()
         else:
             original = path.read_text(encoding="utf-8")
-        if name in {"PKG-INFO", "METADATA"}:
+        if name == "VERSION":
+            text = re.sub(
+                r"\A(\s*)" + old + r"(\s*)\Z",
+                lambda m: m[1] + computed + m[2],
+                original,
+            )
+        elif name in {"PKG-INFO", "METADATA"}:
             header, separator, body = original.partition("\n\n")
             header = re.sub(
                 r"^(Version:[ \t]*)" + old + r"([ \t]*)$",
@@ -231,6 +332,8 @@ def _plan_default_rewrites(
             )
         else:
             text = _rewrite_sections(original, old, computed, name == "pyproject.toml")
+        if candidate == source / "setup.py":
+            text = _rewrite_setup_version(text, package.version, computed)
         if text != original:
             updates[path] = _PlannedRewrite(text, python_source=python_source)
     return updates

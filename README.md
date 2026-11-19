@@ -18,6 +18,7 @@ Build-index generation and attachment belong to **fath-cuan**.
 - [Image build and runtime requirements](docs/image.md)
 - [Tekton tasks and credentials](tekton/tasks/README.md)
 - [Handoffs and migration compatibility](docs/migration.md)
+- [Package reversioning](docs/reversioning.md)
 
 ## Development
 
