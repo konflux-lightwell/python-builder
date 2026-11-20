@@ -584,84 +584,6 @@ COPY --from=cosign-bin /ko-app/cosign /usr/local/bin/cosign
 COPY build_scripts/build-cpython.sh /opt/_internal/build_scripts/
 
 
-#FROM build_cpython AS build_cpython39
-#COPY --from=build_zlib /manylinux-buildfs /
-#COPY --from=build_bzip2 /manylinux-buildfs /
-#COPY --from=build_libpng /manylinux-buildfs /
-#COPY --from=build_libtiff /manylinux-buildfs /
-#COPY --from=build_brotli /manylinux-buildfs /
-#COPY --from=build_harfbuzz /manylinux-buildfs /
-#COPY --from=build_freetype /manylinux-buildfs /
-#COPY --from=build_libwebp /manylinux-buildfs /
-#COPY --from=build_lcms2 /manylinux-buildfs /
-#COPY --from=build_openjpeg /manylinux-buildfs /
-#COPY --from=build_aom /manylinux-buildfs /
-#COPY --from=build_libavif /manylinux-buildfs /
-#COPY --from=build_libjpeg_turbo /manylinux-buildfs /
-#COPY --from=build_libyaml /manylinux-buildfs /
-#COPY --from=build_libxml2 /manylinux-buildfs /
-#COPY --from=build_libxslt /manylinux-buildfs /
-#COPY --from=build_libffi /manylinux-buildfs /
-#COPY --from=build_openblas /manylinux-buildfs /
-#COPY --from=build_libomp /manylinux-buildfs /
-#COPY --from=build_arrow /manylinux-buildfs /
-#ARG MANYLINUX_DISABLE_CLANG_FOR_CPYTHON
-#RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
-#    /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/build-cpython.sh lukasz@langa.pl https://github.com/login/oauth 3.9.21
-
-
-#FROM build_cpython AS build_cpython310
-#COPY --from=build_zlib /manylinux-buildfs /
-#COPY --from=build_bzip2 /manylinux-buildfs /
-#COPY --from=build_libpng /manylinux-buildfs /
-#COPY --from=build_libtiff /manylinux-buildfs /
-#COPY --from=build_brotli /manylinux-buildfs /
-#COPY --from=build_harfbuzz /manylinux-buildfs /
-#COPY --from=build_freetype /manylinux-buildfs /
-#COPY --from=build_libwebp /manylinux-buildfs /
-#COPY --from=build_lcms2 /manylinux-buildfs /
-#COPY --from=build_openjpeg /manylinux-buildfs /
-#COPY --from=build_aom /manylinux-buildfs /
-#COPY --from=build_libavif /manylinux-buildfs /
-#COPY --from=build_libjpeg_turbo /manylinux-buildfs /
-#COPY --from=build_libyaml /manylinux-buildfs /
-#COPY --from=build_libxml2 /manylinux-buildfs /
-#COPY --from=build_libxslt /manylinux-buildfs /
-#COPY --from=build_libffi /manylinux-buildfs /
-#COPY --from=build_openblas /manylinux-buildfs /
-#COPY --from=build_libomp /manylinux-buildfs /
-#COPY --from=build_arrow /manylinux-buildfs /
-#ARG MANYLINUX_DISABLE_CLANG_FOR_CPYTHON
-#RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
-#    /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/build-cpython.sh pablogsal@python.org https://accounts.google.com 3.10.17
-
-
-#FROM build_cpython AS build_cpython311
-#COPY --from=build_zlib /manylinux-buildfs /
-#COPY --from=build_bzip2 /manylinux-buildfs /
-#COPY --from=build_libpng /manylinux-buildfs /
-#COPY --from=build_libtiff /manylinux-buildfs /
-#COPY --from=build_brotli /manylinux-buildfs /
-#COPY --from=build_harfbuzz /manylinux-buildfs /
-#COPY --from=build_freetype /manylinux-buildfs /
-#COPY --from=build_libwebp /manylinux-buildfs /
-#COPY --from=build_lcms2 /manylinux-buildfs /
-#COPY --from=build_openjpeg /manylinux-buildfs /
-#COPY --from=build_aom /manylinux-buildfs /
-#COPY --from=build_libavif /manylinux-buildfs /
-#COPY --from=build_libjpeg_turbo /manylinux-buildfs /
-#COPY --from=build_libyaml /manylinux-buildfs /
-#COPY --from=build_libxml2 /manylinux-buildfs /
-#COPY --from=build_libxslt /manylinux-buildfs /
-#COPY --from=build_libffi /manylinux-buildfs /
-#COPY --from=build_openblas /manylinux-buildfs /
-#COPY --from=build_libomp /manylinux-buildfs /
-#COPY --from=build_arrow /manylinux-buildfs /
-#ARG MANYLINUX_DISABLE_CLANG_FOR_CPYTHON
-#RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
-#    /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/build-cpython.sh pablogsal@python.org https://accounts.google.com 3.11.12
-
-
 FROM build_cpython AS build_cpython312
 COPY --from=build_zlib /manylinux-buildfs /
 COPY --from=build_bzip2 /manylinux-buildfs /
@@ -830,9 +752,6 @@ RUN for tool in /opt/_internal/libpq*/bin/pg_config /opt/_internal/libgpgme*/bin
     done
 COPY build_scripts /opt/_internal/build_scripts/
 RUN \
-    #--mount=type=bind,target=/build_cpython39,from=build_cpython39 \
-    #--mount=type=bind,target=/build_cpython310,from=build_cpython310 \
-    #--mount=type=bind,target=/build_cpython311,from=build_cpython311 \
     --mount=type=bind,target=/build_cpython312,from=build_cpython312 \
     --mount=type=bind,target=/build_cpython313,from=build_cpython313 \
     --mount=type=bind,target=/build_cpython314,from=build_cpython314 \
@@ -906,18 +825,6 @@ COPY overrides/settings.yaml /usr/local/share/fromager/overrides/settings.yaml
 COPY overrides/patches /usr/local/share/fromager/overrides/patches
 COPY overrides/package_plugins /src/package_plugins
 
-#RUN cpython3.9 -m venv venv-3.9
-#RUN venv-3.9/bin/python -m pip install -r builder_requirements/requirements-3.9.txt --no-deps --no-cache-dir --require-hashes
-#RUN venv-3.9/bin/pip install --no-deps /src/package_plugins
-
-#RUN cpython3.10 -m venv venv-3.10
-#RUN venv-3.10/bin/python -m pip install -r builder_requirements/requirements-3.10.txt --no-deps --no-cache-dir --require-hashes
-#RUN venv-3.10/bin/pip install --no-deps /src/package_plugins
-
-#RUN cpython3.11 -m venv venv-3.11
-#RUN venv-3.11/bin/python -m pip install -r builder_requirements/requirements-3.11.txt --no-deps --no-cache-dir --require-hashes
-#RUN venv-3.11/bin/pip install --no-deps /src/package_plugins
-
 RUN cpython3.12 -m venv venv-3.12
 RUN venv-3.12/bin/python -m pip install -r builder_requirements/requirements-3.12.txt --no-deps --no-cache-dir --require-hashes
 RUN venv-3.12/bin/pip install --no-deps /src/package_plugins
@@ -936,24 +843,6 @@ RUN \
     ln -s /src/venv-3.12/bin/python /usr/local/bin/python3 && \
     ln -s /src/venv-3.12/bin/wheel /usr/local/bin/wheel && \
     ln -s /src/venv-3.12/bin/fromager /usr/local/bin/fromager
-
-# python 3.9 setup
-#RUN \
-#    ln -s /src/venv-3.9/bin/python /usr/local/bin/python3.9 && \
-#    ln -s /src/venv-3.9/bin/wheel /usr/local/bin/wheel-3.9 && \
-#    ln -s /src/venv-3.9/bin/fromager /usr/local/bin/fromager-3.9
-
-# python 3.10 setup
-#RUN \
-#    ln -sf /src/venv-3.10/bin/python /usr/local/bin/python3.10 && \
-#    ln -sf /src/venv-3.10/bin/wheel /usr/local/bin/wheel-3.10 && \
-#    ln -sf /src/venv-3.10/bin/fromager /usr/local/bin/fromager-3.10
-
-# python 3.11 setup
-#RUN \
-#    ln -sf /src/venv-3.11/bin/python /usr/local/bin/python3.11 && \
-#    ln -sf /src/venv-3.11/bin/wheel /usr/local/bin/wheel-3.11 && \
-#    ln -sf /src/venv-3.11/bin/fromager /usr/local/bin/fromager-3.11
 
 # python 3.12 setup, in addition to the default 3.12 above
 RUN \
