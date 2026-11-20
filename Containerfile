@@ -610,6 +610,58 @@ RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
     /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/build-cpython.sh thomas@python.org https://accounts.google.com 3.12.12
 
 
+FROM build_cpython AS build_cpython313
+COPY --from=build_zlib /manylinux-buildfs /
+COPY --from=build_bzip2 /manylinux-buildfs /
+COPY --from=build_libpng /manylinux-buildfs /
+COPY --from=build_libtiff /manylinux-buildfs /
+COPY --from=build_brotli /manylinux-buildfs /
+COPY --from=build_harfbuzz /manylinux-buildfs /
+COPY --from=build_freetype /manylinux-buildfs /
+COPY --from=build_libwebp /manylinux-buildfs /
+COPY --from=build_lcms2 /manylinux-buildfs /
+COPY --from=build_openjpeg /manylinux-buildfs /
+COPY --from=build_aom /manylinux-buildfs /
+COPY --from=build_libavif /manylinux-buildfs /
+COPY --from=build_libjpeg_turbo /manylinux-buildfs /
+COPY --from=build_libyaml /manylinux-buildfs /
+COPY --from=build_libxml2 /manylinux-buildfs /
+COPY --from=build_libxslt /manylinux-buildfs /
+COPY --from=build_libffi /manylinux-buildfs /
+COPY --from=build_openblas /manylinux-buildfs /
+COPY --from=build_libomp /manylinux-buildfs /
+COPY --from=build_arrow /manylinux-buildfs /
+ARG MANYLINUX_DISABLE_CLANG_FOR_CPYTHON
+RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
+    /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/build-cpython.sh thomas@python.org https://accounts.google.com 3.13.1
+
+
+FROM build_cpython AS build_cpython314
+COPY --from=build_zlib /manylinux-buildfs /
+COPY --from=build_bzip2 /manylinux-buildfs /
+COPY --from=build_libpng /manylinux-buildfs /
+COPY --from=build_libtiff /manylinux-buildfs /
+COPY --from=build_brotli /manylinux-buildfs /
+COPY --from=build_harfbuzz /manylinux-buildfs /
+COPY --from=build_freetype /manylinux-buildfs /
+COPY --from=build_libwebp /manylinux-buildfs /
+COPY --from=build_lcms2 /manylinux-buildfs /
+COPY --from=build_openjpeg /manylinux-buildfs /
+COPY --from=build_aom /manylinux-buildfs /
+COPY --from=build_libavif /manylinux-buildfs /
+COPY --from=build_libjpeg_turbo /manylinux-buildfs /
+COPY --from=build_libyaml /manylinux-buildfs /
+COPY --from=build_libxml2 /manylinux-buildfs /
+COPY --from=build_libxslt /manylinux-buildfs /
+COPY --from=build_libffi /manylinux-buildfs /
+COPY --from=build_openblas /manylinux-buildfs /
+COPY --from=build_libomp /manylinux-buildfs /
+COPY --from=build_arrow /manylinux-buildfs /
+ARG MANYLINUX_DISABLE_CLANG_FOR_CPYTHON
+RUN --mount=type=bind,from=static_clang,target=/tmp/cross-compiler,ro \
+    /tmp/cross-compiler/entrypoint /opt/_internal/build_scripts/build-cpython.sh hugo@python.org https://github.com/login/oauth 3.14.0
+
+
 FROM scratch AS merged_buildfs
 COPY --from=build_zlib /manylinux-buildfs /
 COPY --from=build_bzip2 /manylinux-buildfs /
@@ -699,7 +751,10 @@ RUN for tool in /opt/_internal/libpq*/bin/pg_config /opt/_internal/libgpgme*/bin
         [ -f "$tool" ] && ln -sf "$tool" /usr/local/bin/; \
     done
 COPY build_scripts /opt/_internal/build_scripts/
-RUN    --mount=type=bind,target=/build_cpython312,from=build_cpython312 \
+RUN \
+    --mount=type=bind,target=/build_cpython312,from=build_cpython312 \
+    --mount=type=bind,target=/build_cpython313,from=build_cpython313 \
+    --mount=type=bind,target=/build_cpython314,from=build_cpython314 \
     --mount=type=bind,target=/build_cpython_base,from=build_cpython \
     mkdir -p /opt/_internal && \
     cp -rf /build_cpython*/opt/_internal/cpython* /opt/_internal/ && \
@@ -762,21 +817,50 @@ RUN dnf -y update && \
     unzip \
     && dnf clean all \
     && rm -rf /var/cache/dnf
-COPY requirements.txt .
-RUN cpython3.12 -m venv venv
-RUN venv/bin/python -m pip install -r requirements.txt --no-deps --no-cache-dir --require-hashes
 
+COPY builder_requirements /src/builder_requirements
 COPY scripts/* /usr/local/bin/
 COPY src/lightwell_python/build_summary.py /usr/local/bin/write-checkout-build-summary
 COPY overrides/settings.yaml /usr/local/share/fromager/overrides/settings.yaml
 COPY overrides/patches /usr/local/share/fromager/overrides/patches
 COPY overrides/package_plugins /src/package_plugins
-RUN venv/bin/pip install --no-deps /src/package_plugins
 
+RUN cpython3.12 -m venv venv-3.12
+RUN venv-3.12/bin/python -m pip install -r builder_requirements/requirements-3.12.txt --no-deps --no-cache-dir --require-hashes
+RUN venv-3.12/bin/pip install --no-deps /src/package_plugins
+
+RUN cpython3.13 -m venv venv-3.13
+RUN venv-3.13/bin/python -m pip install -r builder_requirements/requirements-3.13.txt --no-deps --no-cache-dir --require-hashes
+RUN venv-3.13/bin/pip install --no-deps /src/package_plugins
+
+RUN cpython3.14 -m venv venv-3.14
+RUN venv-3.14/bin/python -m pip install -r builder_requirements/requirements-3.14.txt --no-deps --no-cache-dir --require-hashes
+RUN venv-3.14/bin/pip install --no-deps /src/package_plugins
+
+
+# set up default python/wheel/fromager to 3.12 to preserve backwards compatibility
 RUN \
-    ln -s /src/venv/bin/python /usr/local/bin/python3 && \
-    ln -s /src/venv/bin/fromager /usr/local/bin/fromager && \
-    ln -s /src/venv/bin/wheel /usr/local/bin/wheel
+    ln -s /src/venv-3.12/bin/python /usr/local/bin/python3 && \
+    ln -s /src/venv-3.12/bin/wheel /usr/local/bin/wheel && \
+    ln -s /src/venv-3.12/bin/fromager /usr/local/bin/fromager
+
+# python 3.12 setup, in addition to the default 3.12 above
+RUN \
+    ln -sf /src/venv-3.12/bin/python /usr/local/bin/python3.12 && \
+    ln -sf /src/venv-3.12/bin/wheel /usr/local/bin/wheel-3.12 && \
+    ln -sf /src/venv-3.12/bin/fromager /usr/local/bin/fromager-3.12
+
+# python 3.13 setup
+RUN \
+    ln -sf /src/venv-3.13/bin/python /usr/local/bin/python3.13 && \
+    ln -sf /src/venv-3.13/bin/wheel /usr/local/bin/wheel-3.13 && \
+    ln -sf /src/venv-3.13/bin/fromager /usr/local/bin/fromager-3.13
+
+# python 3.14 setup
+RUN \
+    ln -sf /src/venv-3.14/bin/python /usr/local/bin/python3.14 && \
+    ln -sf /src/venv-3.14/bin/wheel /usr/local/bin/wheel-3.14 && \
+    ln -sf /src/venv-3.14/bin/fromager /usr/local/bin/fromager-3.14
 
 ENV PYTHONUNBUFFERED=1
 CMD ["bash"]
