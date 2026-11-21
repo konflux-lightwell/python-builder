@@ -20,7 +20,11 @@ class ComputedVersion:
     """The ADR-0020 version and its Git lineage evidence.
 
     Attributes:
-        full: Upstream version plus the optional +rhlw.B[.n.N] suffix.
+        full: Upstream version plus the rhlw.B[.n.N] build marker. When the
+            upstream version has no local segment the marker forms one
+            (``1.0+rhlw.1``); otherwise it is joined into the existing local
+            segment (``1.0+upstream.1.rhlw.1``) so the result stays a valid
+            PEP 440 version, which allows only one local segment.
         b: Number of backport commits.
         n: Number of novel commits; zero for Backport and Validated builds.
         commit: Short HEAD commit ID, or an empty string for Validated builds.
@@ -53,15 +57,14 @@ def compute_version(
         The full version, backport/novel counts, and abbreviated HEAD commit.
 
     Raises:
-        TaskError: An upstream local suffix is already present, a required tag is
-            missing, or the tagged commits do not form the expected ancestry.
+        TaskError: A required tag is missing, or the tagged commits do not form
+            the expected ancestry.
     """
     if build_type == BuildType.VALIDATED:
         return ComputedVersion(package.version)
-    if "+" in package.version:
-        raise TaskError("Remediation requires an upstream version without a local suffix")
     if build_type == BuildType.SCRATCH:
-        return ComputedVersion(package.version + "+rhlw.0")
+        return ComputedVersion(package.version + _suffix_separator(package.version) + "rhlw.0")
+    separator = _suffix_separator(package.version)
 
     def git(*args: str) -> str:
         """Run a read-only Git query scoped to this repository."""
@@ -81,8 +84,19 @@ def compute_version(
         git("merge-base", "--is-ancestor", baseline, head)
         b = int(git("rev-list", "--count", f"{ingestion}..{baseline}"))
         n = int(git("rev-list", "--count", f"{baseline}..{head}"))
-    suffix = f"+rhlw.{b}" + (f".n.{n}" if n else "")
-    return ComputedVersion(package.version + suffix, b, n, git("rev-parse", "--short=7", "HEAD"))
+    suffix = f"rhlw.{b}" + (f".n.{n}" if n else "")
+    head = git("rev-parse", "--short=7", "HEAD")
+    return ComputedVersion(package.version + separator + suffix, b, n, head)
+
+
+def _suffix_separator(upstream: str) -> str:
+    """Return the separator joining the build marker to the upstream version.
+
+    PEP 440 allows only one local version segment per version, so the marker
+    starts a new segment (``+``) only when the upstream version has none and is
+    otherwise joined into the existing local segment with a ``.``.
+    """
+    return "." if "+" in upstream else "+"
 
 
 def version_counts(package: Package, computed: str, build_type: BuildType) -> tuple[int, int]:
@@ -103,7 +117,11 @@ def version_counts(package: Package, computed: str, build_type: BuildType) -> tu
         if computed != package.version:
             raise TaskError("Validated builds must use the upstream version")
         return 0, 0
-    match = re.fullmatch(re.escape(package.version) + r"\+rhlw\.(\d+)(?:\.n\.?(\d+))?", computed)
+    separator = _suffix_separator(package.version)
+    match = re.fullmatch(
+        re.escape(package.version) + re.escape(separator) + r"rhlw\.(\d+)(?:\.n\.?(\d+))?",
+        computed,
+    )
     if not match:
         raise TaskError("Computed version does not match the upstream remediation version scheme")
     b, n = int(match[1]), int(match[2] or 0)
