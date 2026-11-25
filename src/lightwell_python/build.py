@@ -67,16 +67,24 @@ def backend_environment(
         yield environment
 
 
-def _fromager_common_args(settings: Path, overrides: Path, jobs: int | None) -> list[str | Path]:
+def _fromager_common_args(
+    settings: Path,
+    overrides: Path,
+    jobs: int | None,
+    constraints_file: Path | None = None,
+) -> list[str | Path]:
     """Assemble the Fromager CLI prefix shared by bootstrap/build-sequence/step calls.
 
     Args:
         settings: Directory containing resolved per-package Fromager YAML.
         overrides: Builder-provided directory containing settings.yaml and patches.
         jobs: Optional Fromager parallelism limit.
+        constraints_file: Optional rendered build-config constraints file. Unlike
+            --settings-dir, Fromager applies this to every build environment's
+            pip install, not just the primary package's.
 
     Returns:
-        The ``fromager`` executable followed by its settings/patches/jobs flags.
+        The ``fromager`` executable followed by its settings/constraints/patches/jobs flags.
     """
     common: list[str | Path] = [
         "fromager",
@@ -85,6 +93,8 @@ def _fromager_common_args(settings: Path, overrides: Path, jobs: int | None) -> 
         "--settings-dir",
         settings,
     ]
+    if constraints_file is not None:
+        common += ["--constraints-file", constraints_file]
     if (overrides / "patches").is_dir():
         common += ["--patches-dir", overrides / "patches"]
     if jobs:
@@ -119,6 +129,7 @@ def run_fromager(
     *,
     overrides: Path = Path("/usr/local/share/fromager/overrides"),
     jobs: int | None = None,
+    constraints_file: Path | None = None,
 ) -> None:
     """Bootstrap dependencies, build the resolved order, and repair wheels.
 
@@ -132,13 +143,15 @@ def run_fromager(
         wheel_server: Optional cache URL; empty disables prebuilt-wheel lookup.
         overrides: Builder-provided directory containing settings.yaml and patches.
         jobs: Optional Fromager parallelism limit.
+        constraints_file: Optional rendered build-config constraints file, applied
+            to both bootstrap resolution and every build environment's pip install.
 
     Raises:
         TaskError: A tool fails, the build summary is absent, or wheel repair fails.
         FileExistsError: The output directory already exists.
     """
     output.mkdir(parents=True, exist_ok=False)
-    common = _fromager_common_args(settings, overrides, jobs)
+    common = _fromager_common_args(settings, overrides, jobs, constraints_file)
     cache = ["--cache-wheel-server-url", wheel_server] if wheel_server else []
     # Wheel ZIP timestamps must be at least 1980-01-01, even for reproducible builds.
     env = environment | {"FROMAGER_SDISTS_REPO": str(sdists), "SOURCE_DATE_EPOCH": "315532800"}
@@ -167,6 +180,7 @@ def run_fromager_checkout(
     *,
     overrides: Path = Path("/usr/local/share/fromager/overrides"),
     jobs: int | None = None,
+    constraints_file: Path | None = None,
 ) -> None:
     """Build a package from a pre-staged git checkout using Fromager's step commands.
 
@@ -202,6 +216,8 @@ def run_fromager_checkout(
             dependencies.
         overrides: Builder-provided directory containing settings.yaml and patches.
         jobs: Optional Fromager parallelism limit.
+        constraints_file: Optional rendered build-config constraints file, applied
+            to every step's build environment pip install.
 
     Raises:
         TaskError: A tool fails or no wheel is produced.
@@ -214,7 +230,7 @@ def run_fromager_checkout(
     work_dir = output / "work-dir"
     work_dir.mkdir(parents=True, exist_ok=True)
     shutil.move(str(checkout.parent), work_dir / base)
-    common = _fromager_common_args(settings, overrides, jobs)
+    common = _fromager_common_args(settings, overrides, jobs, constraints_file)
     env = environment | {"SOURCE_DATE_EPOCH": "315532800"}
     # See the wheel_server docstring above: "step" has no bootstrap-style PyPI
     # fallback for build-system/backend dependencies, so it always needs a real

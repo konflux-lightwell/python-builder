@@ -45,6 +45,7 @@ VERSION_CONFIG_FIELDS = (
     "env",
     "version_rewrite",
     "canonical_source",
+    "build_constraints",
 )
 CANONICAL_SOURCE_TYPES = ("pypi-sdist", "git")
 CANONICAL_SOURCE_FIELDS = ("type", "upstream_url", "internal_url", "ref")
@@ -226,6 +227,31 @@ def _validate_tests(tests, loc: str, errors: list[str]) -> None:
             for i, cmd in enumerate(cmds):
                 if not isinstance(cmd, str) or not cmd.strip():
                     errors.append(f"{loc}.commands[{i}] must be a non-empty string")
+
+
+def _validate_build_constraints(items, loc: str, errors: list[str]) -> None:
+    """Validate a nonempty list of pip-constraints-style PEP 508 requirements.
+
+    These are merged into a single file passed to Fromager's --constraints-file,
+    which applies to dependency resolution and every build environment's pip
+    install -- unlike fromager_settings.project_override.update_build_requires,
+    which only reaches the primary package's own build environment.
+    """
+    if not isinstance(items, list):
+        errors.append(f"{loc} must be a list, got {type(items).__name__}")
+        return
+    if not items:
+        errors.append(f"{loc} must be a non-empty list")
+        return
+    for i, item in enumerate(items):
+        iloc = f"{loc}[{i}]"
+        if not isinstance(item, str) or not item.strip():
+            errors.append(f"{iloc} must be a non-empty string")
+            continue
+        try:
+            Requirement(item)
+        except InvalidRequirement as e:
+            errors.append(f"{iloc}: invalid PEP 508 requirement '{item}': {e}")
 
 
 def _validate_allowed_artifacts(allowed, loc: str, errors: list[str]) -> None:
@@ -463,6 +489,8 @@ def _validate_config_body(config, loc: str, errors: list[str]) -> None:
         _validate_version_rewrite(config["version_rewrite"], f"{loc}.version_rewrite", errors)
     if "canonical_source" in config:
         _validate_canonical_source(config["canonical_source"], f"{loc}.canonical_source", errors)
+    if "build_constraints" in config:
+        _validate_build_constraints(config["build_constraints"], f"{loc}.build_constraints", errors)
 
 
 def _validate_version_configs(config: dict, errors: list[str]) -> None:

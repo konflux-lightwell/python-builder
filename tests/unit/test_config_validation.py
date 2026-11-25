@@ -287,6 +287,43 @@ def test_tests_unknown_field(tmp_path):
     assert has(errors, "tests: unknown field 'extra'")
 
 
+# --- build_constraints ------------------------------------------------------
+
+
+def test_build_constraints_valid(tmp_path):
+    config = baseline()
+    config["version_configs"]["<12.3.0"]["build_constraints"] = ["setuptools<82"]
+    assert run(tmp_path, config) == []
+
+
+def test_build_constraints_not_list(tmp_path):
+    config = baseline()
+    config["version_configs"]["<12.3.0"]["build_constraints"] = "setuptools<82"
+    errors = run(tmp_path, config)
+    assert has(errors, "build_constraints must be a list, got str")
+
+
+def test_build_constraints_empty_list_rejected(tmp_path):
+    config = baseline()
+    config["version_configs"]["<12.3.0"]["build_constraints"] = []
+    errors = run(tmp_path, config)
+    assert has(errors, "build_constraints must be a non-empty list")
+
+
+def test_build_constraints_empty_string_rejected(tmp_path):
+    config = baseline()
+    config["version_configs"]["<12.3.0"]["build_constraints"] = [""]
+    errors = run(tmp_path, config)
+    assert has(errors, "build_constraints[0] must be a non-empty string")
+
+
+def test_build_constraints_invalid_requirement(tmp_path):
+    config = baseline()
+    config["version_configs"]["<12.3.0"]["build_constraints"] = ["!!bad"]
+    errors = run(tmp_path, config)
+    assert has(errors, "invalid PEP 508 requirement '!!bad'")
+
+
 # --- cross-validation & non-overlapping -----------------------------------
 
 

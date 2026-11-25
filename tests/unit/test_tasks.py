@@ -562,3 +562,47 @@ def test_render_settings_rejects_non_mapping_download_source(tmp_path, package_c
 
     with pytest.raises(TaskError, match="download_source"):
         config.render_settings(tmp_path / "demo.yaml", Package("demo", "1.0"), "1.0+rhlw.1")
+
+
+def test_build_config_defaults_constraints_to_empty(tmp_path, package_config):
+    from lightwell_python.config import BuildConfig
+
+    path = tmp_path / "demo.json"
+    write_json(path, package_config)
+    config = BuildConfig.load(path, Package("demo", "1.0"))
+    assert config.constraints == []
+
+
+def test_build_config_parses_constraints_from_version_rule(tmp_path, package_config):
+    from lightwell_python.config import BuildConfig
+
+    package_config["version_configs"] = {"1.0": {"build_constraints": ["setuptools<82"]}}
+    path = tmp_path / "demo.json"
+    write_json(path, package_config)
+    config = BuildConfig.load(path, Package("demo", "1.0"))
+    assert config.constraints == ["setuptools<82"]
+
+
+def test_render_constraints_returns_none_when_no_constraints(tmp_path, package_config):
+    from lightwell_python.config import BuildConfig
+
+    path = tmp_path / "demo.json"
+    write_json(path, package_config)
+    config = BuildConfig.load(path, Package("demo", "1.0"))
+
+    result = config.render_constraints(tmp_path / "constraints.txt")
+    assert result is None
+    assert not (tmp_path / "constraints.txt").exists()
+
+
+def test_render_constraints_writes_pip_style_file_when_present(tmp_path, package_config):
+    from lightwell_python.config import BuildConfig
+
+    package_config["version_configs"] = {"1.0": {"build_constraints": ["setuptools<82", "wheel<1"]}}
+    path = tmp_path / "demo.json"
+    write_json(path, package_config)
+    config = BuildConfig.load(path, Package("demo", "1.0"))
+
+    result = config.render_constraints(tmp_path / "constraints.txt")
+    assert result == tmp_path / "constraints.txt"
+    assert result.read_text(encoding="utf-8") == "setuptools<82\nwheel<1\n"

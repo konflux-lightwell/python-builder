@@ -390,6 +390,42 @@ def test_missing_build_summary_fails(tmp_path):
         )
 
 
+def test_run_fromager_passes_constraints_file_to_bootstrap_and_build_sequence(tmp_path, make_wheel):
+    (tmp_path / "sdists").mkdir()
+    constraints = tmp_path / "constraints.txt"
+    constraints.write_text("setuptools<82\n")
+    runner = wheel_builder(make_wheel)
+    run_fromager(
+        runner,
+        tmp_path / "output",
+        tmp_path / "sdists",
+        tmp_path / "settings",
+        Package("demo", "1.0"),
+        {},
+        constraints_file=constraints,
+    )
+    fromager_calls = [args for args, _ in runner.calls if args[0] == "fromager"]
+    assert len(fromager_calls) == 2
+    for args in fromager_calls:
+        idx = args.index("--constraints-file")
+        assert args[idx + 1] == str(constraints)
+
+
+def test_run_fromager_omits_constraints_file_when_not_given(tmp_path, make_wheel):
+    (tmp_path / "sdists").mkdir()
+    runner = wheel_builder(make_wheel)
+    run_fromager(
+        runner,
+        tmp_path / "output",
+        tmp_path / "sdists",
+        tmp_path / "settings",
+        Package("demo", "1.0"),
+        {},
+    )
+    for args, _ in runner.calls:
+        assert "--constraints-file" not in args
+
+
 def _stage_checkout(tmp_path, base):
     """Create a double-nested checkout layout the way Task 4's export does.
 
@@ -509,6 +545,34 @@ def test_run_fromager_checkout_uses_given_wheel_server(tmp_path, make_wheel):
     for step in ("prepare-build", "build-wheel"):
         idx = step_calls[step].index("--wheel-server-url")
         assert step_calls[step][idx + 1] == "https://cache.example.com/simple/"
+
+
+def test_run_fromager_checkout_passes_constraints_file_to_all_steps(tmp_path, make_wheel):
+    calls = []
+
+    def record(args, kwargs):
+        calls.append(args)
+        if "step" in args and args[args.index("step") + 1] == "build-wheel":
+            make_wheel(kwargs["cwd"] / "wheels-repo/build")
+
+    runner = FakeRunner(record)
+    inner = _stage_checkout(tmp_path, "demo-1.0+rhlw.1")
+    constraints = tmp_path / "constraints.txt"
+    constraints.write_text("setuptools<82\n")
+    run_fromager_checkout(
+        runner,
+        tmp_path / "output",
+        inner,
+        tmp_path / "settings",
+        Package("demo", "1.0"),
+        "1.0+rhlw.1",
+        {},
+        constraints_file=constraints,
+    )
+    step_calls = {c[c.index("step") + 1]: c for c in calls if "step" in c}
+    for step in ("prepare-build", "build-sdist", "build-wheel"):
+        idx = step_calls[step].index("--constraints-file")
+        assert step_calls[step][idx + 1] == str(constraints)
 
 
 def test_run_fromager_checkout_missing_checkout_fails(tmp_path):
@@ -768,6 +832,57 @@ def run_wheels(tmp_path, wheel_input, make_wheel):
         return registry, work
 
     return run
+
+
+def _run_wheels_with_runner(tmp_path, sdists_dir, runner):
+    """Run the wheel task once against a prepared sdists tree, returning the runner's calls.
+
+    Unlike the `run_wheels` fixture, this exposes the runner so callers can inspect
+    the exact Fromager invocation -- needed to assert on --constraints-file.
+    """
+    work = tmp_path / "task"
+    work.mkdir()
+    wheels.run(
+        workdir=work,
+        results=tmp_path / "results",
+        package=Package("demo", "1.0"),
+        computed="1.0+rhlw.1",
+        build_type=BuildType.BACKPORT,
+        sdists_dir=sdists_dir,
+        image="localhost:5000/org/repo:latest",
+        python_builder_image="localhost:5000/org/python-builder@sha256:" + "e" * 64,
+        manifest_output=tmp_path / "manifest-output.json",
+        registry=FakeRegistry(),
+        runner=runner,
+    )
+
+
+def test_wheels_run_passes_rendered_constraints_file_to_fromager(
+    tmp_path, sdist_input, package_config, make_wheel
+):
+    package_config["version_configs"] = {"1.0": {"build_constraints": ["setuptools<82"]}}
+    write_json(sdist_input / "build-configs/packages/demo.json", package_config)
+    write_json(sdist_input / "backend-env.json", {})
+    (sdist_input / ".commit").write_text("abcdef1")
+
+    runner = wheel_builder(make_wheel)
+    _run_wheels_with_runner(tmp_path, sdist_input, runner)
+
+    fromager_calls = [args for args, _ in runner.calls if args[0] == "fromager"]
+    assert len(fromager_calls) == 2
+    for args in fromager_calls:
+        idx = args.index("--constraints-file")
+        assert Path(args[idx + 1]).read_text(encoding="utf-8") == "setuptools<82\n"
+
+
+def test_wheels_run_omits_constraints_file_when_config_has_none(tmp_path, wheel_input, make_wheel):
+    runner = wheel_builder(make_wheel)
+    _run_wheels_with_runner(tmp_path, wheel_input, runner)
+
+    fromager_calls = [args for args, _ in runner.calls if args[0] == "fromager"]
+    assert len(fromager_calls) == 2
+    for args in fromager_calls:
+        assert "--constraints-file" not in args
 
 
 def attached_sbom(registry: FakeRegistry) -> bytes:

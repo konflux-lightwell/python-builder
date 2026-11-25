@@ -27,6 +27,9 @@ class BuildConfig:
         rewrites: Explicit path/pattern/replacement rules; empty means use defaults.
         allowed: Canonical names permitted to be built from source in remediation.
         canonical_source: Source type and configuration for this package version.
+        constraints: Pip-constraints-style PEP 508 requirements applied to every
+            Fromager build environment, not just the primary package's own --
+            see render_constraints.
     """
 
     settings: dict[str, Any]
@@ -34,6 +37,7 @@ class BuildConfig:
     rewrites: list[dict[str, str]]
     allowed: frozenset[str]
     canonical_source: dict[str, Any]
+    constraints: list[str]
 
     @classmethod
     def load(cls, path: Path, package: Package) -> BuildConfig:
@@ -84,6 +88,7 @@ class BuildConfig:
                 selected.get("allowed_artifacts", config.get("allowed_artifacts", [package.name]))
             ),
             canonical_source=canonical_source,
+            constraints=selected.get("build_constraints", []),
         )
 
     def environment(self, package: Package, computed: str) -> dict[str, str]:
@@ -144,6 +149,29 @@ class BuildConfig:
         )
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(yaml.safe_dump(settings, sort_keys=False), encoding="utf-8")
+
+    def render_constraints(self, path: Path) -> Path | None:
+        """Write a pip-constraints-style file for Fromager's --constraints-file.
+
+        Unlike fromager_settings.project_override.update_build_requires, which only
+        edits the primary package's own build-requires list, a constraints file is
+        applied by Fromager to both dependency resolution and every build
+        environment's pip install -- including transitive build dependencies the
+        primary package's settings can never reach.
+
+        Args:
+            path: Destination; missing parent directories are created. Left
+                untouched when this build declares no constraints.
+
+        Returns:
+            path when constraints were written, otherwise None -- the caller
+            omits --constraints-file entirely in that case.
+        """
+        if not self.constraints:
+            return None
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("".join(f"{c}\n" for c in self.constraints), encoding="utf-8")
+        return path
 
 
 def expand(value: str, package: Package, computed: str) -> str:
