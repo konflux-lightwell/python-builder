@@ -126,6 +126,7 @@ def run(
             raise TaskError("Backend environment does not match the build-config snapshot")
         settings = workdir / "fromager-settings"
         config.render_settings(settings / f"{package.name}.yaml", package, computed)
+        constraints_file = config.render_constraints(workdir / "fromager-constraints.txt")
 
     output = workdir / "output"
     with backend_environment(runner.environment | environment, pulp_secret) as env:
@@ -141,6 +142,7 @@ def run(
                 wheel_server,
                 overrides=overrides,
                 jobs=jobs,
+                constraints_file=constraints_file,
             )
         else:
             with log_stage("Locate restored sdist archive"):
@@ -156,6 +158,7 @@ def run(
                 wheel_server,
                 overrides=overrides,
                 jobs=jobs,
+                constraints_file=constraints_file,
             )
 
     artifact = workdir / "artifact"
