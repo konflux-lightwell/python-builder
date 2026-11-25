@@ -102,6 +102,7 @@ def make_wheel():
         version="1.0+rhlw.1",
         *,
         sbom_version=None,
+        sbom=None,
         name="demo",
         redhat=False,
         native=False,
@@ -112,19 +113,23 @@ def make_wheel():
             / f"{name}-{version}-py3-none-{'manylinux_2_28_x86_64' if native else 'any'}.whl"
         )
         dist = f"{name}-{version}.dist-info"
-        sbom = {
-            "packages": [
-                {
-                    "SPDXID": "SPDXRef-wheel",
-                    "name": name,
-                    "versionInfo": sbom_version or version,
-                    "externalRefs": [
-                        {"referenceType": "purl", "referenceLocator": f"pkg:pypi/{name}@{version}"}
-                    ],
-                }
-            ],
-            "documentDescribes": ["SPDXRef-wheel"],
-        }
+        if sbom is None:
+            sbom = {
+                "packages": [
+                    {
+                        "SPDXID": "SPDXRef-wheel",
+                        "name": name,
+                        "versionInfo": sbom_version or version,
+                        "externalRefs": [
+                            {
+                                "referenceType": "purl",
+                                "referenceLocator": f"pkg:pypi/{name}@{version}",
+                            }
+                        ],
+                    }
+                ],
+                "documentDescribes": ["SPDXRef-wheel"],
+            }
         with zipfile.ZipFile(wheel, "w") as archive:
             archive.writestr(f"{dist}/METADATA", f"Name: {name}\nVersion: {version}\n")
             archive.writestr(

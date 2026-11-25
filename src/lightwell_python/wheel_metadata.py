@@ -64,6 +64,8 @@ def patch_sbom(sbom: dict, filename: str, libraries: dict[str, list[str]]) -> di
     packages = sbom.setdefault("packages", [])
     relationships = sbom.setdefault("relationships", [])
     root = _root_package_id(sbom)
+    if root is None and packages:
+        root = packages[0].get("SPDXID")
     existing = {p.get("name") for p in packages}
     ids = {p.get("SPDXID") for p in packages}
     if root:
@@ -96,7 +98,7 @@ def patch_sbom(sbom: dict, filename: str, libraries: dict[str, list[str]]) -> di
                 }
             )
     for package in packages:
-        if package.get("SPDXID") == "SPDXRef-upstream":
+        if package.get("SPDXID") != root:
             continue
         for ref in package.get("externalRefs", []):
             if ref.get("referenceType") == "purl" and "file_name=" not in ref["referenceLocator"]:
@@ -108,21 +110,21 @@ def patch_sbom(sbom: dict, filename: str, libraries: dict[str, list[str]]) -> di
 
 
 def _root_package_id(sbom: dict) -> str | None:
-    """Find the described SPDX package, falling back to the first package entry."""
-    for relationship in sbom.get("relationships", []):
-        if (
-            relationship.get("relationshipType") == "DESCRIBES"
-            and relationship.get("spdxElementId") == "SPDXRef-DOCUMENT"
-        ):
-            return relationship["relatedSpdxElement"]
-
-    described_packages = sbom.get("documentDescribes", [])
-    if described_packages:
-        return described_packages[0]
-    packages = sbom.get("packages", [])
-    if packages:
-        return packages[0].get("SPDXID")
-    return None
+    """Find the uniquely described SPDX package without assuming a package ID."""
+    described = list(sbom.get("documentDescribes", []))
+    document_id = sbom.get("SPDXID", "SPDXRef-DOCUMENT")
+    described.extend(
+        relationship.get("relatedSpdxElement")
+        for relationship in sbom.get("relationships", [])
+        if relationship.get("relationshipType") == "DESCRIBES"
+        and relationship.get("spdxElementId") == document_id
+    )
+    if any(not isinstance(identifier, str) or not identifier for identifier in described):
+        raise TaskError("Primary wheel SBOM has an invalid described package ID")
+    identifiers = set(described)
+    if len(identifiers) > 1:
+        raise TaskError("Primary wheel SBOM describes multiple packages")
+    return next(iter(identifiers), None)
 
 
 def _dist_info_directory(archive: zipfile.ZipFile) -> str:
@@ -225,23 +227,50 @@ def verify_primary_wheels(artifact: Path, package: Package, computed: str) -> li
         if name != package.name:
             continue
         if version != Version(computed):
-            raise TaskError(f"Primary wheel filename version mismatch: {path.name}")
+            raise TaskError(
+                f"Primary wheel filename version mismatch in {path.name}: "
+                f"expected {computed!r}, found {str(version)!r}"
+            )
         with zipfile.ZipFile(path) as wheel:
             dist_info = _dist_info_directory(wheel)
             metadata = f"{dist_info}/METADATA"
             sbom_name = f"{dist_info}/sboms/redhat.spdx.json"
             if wheel.namelist().count(metadata) != 1 or wheel.namelist().count(sbom_name) != 1:
-                raise TaskError("Primary wheel must contain one METADATA and one redhat.spdx.json")
+                raise TaskError(
+                    f"Primary wheel {path.name} must contain one METADATA "
+                    "and one redhat.spdx.json: "
+                    f"found {wheel.namelist().count(metadata)} METADATA entries and "
+                    f"{wheel.namelist().count(sbom_name)} redhat.spdx.json entries"
+                )
             headers = BytesParser().parsebytes(wheel.read(metadata))
             if (
                 headers.get("Version") != computed
                 or canonicalize_name(headers.get("Name", "")) != package.name
             ):
-                raise TaskError("Primary wheel METADATA identity/version mismatch")
+                raise TaskError(
+                    f"Primary wheel METADATA identity/version mismatch in {path.name}: "
+                    f"expected name {package.name!r}, found {headers.get('Name')!r}; "
+                    f"expected version {computed!r}, found {headers.get('Version')!r}"
+                )
             sbom = json.loads(wheel.read(sbom_name))
-            primary = [p for p in sbom.get("packages", []) if p.get("SPDXID") == "SPDXRef-wheel"]
-            if len(primary) != 1 or primary[0].get("versionInfo") != computed:
-                raise TaskError("Primary wheel SBOM version mismatch")
+            root = _root_package_id(sbom)
+            primary = [p for p in sbom.get("packages", []) if p.get("SPDXID") == root]
+            if root is None or len(primary) != 1:
+                raise TaskError(
+                    "Primary wheel SBOM must describe exactly one existing package "
+                    f"in {path.name}: "
+                    f"described ID {root!r}, found {len(primary)} matching package entries"
+                )
+            if canonicalize_name(primary[0].get("name", "")) != package.name:
+                raise TaskError(
+                    f"Primary wheel SBOM package identity mismatch in {path.name} ({root}): "
+                    f"expected {package.name!r}, found {primary[0].get('name')!r}"
+                )
+            if primary[0].get("versionInfo") != computed:
+                raise TaskError(
+                    f"Primary wheel SBOM version mismatch in {path.name}: expected {computed!r}, "
+                    f"found {primary[0].get('versionInfo')!r} in {root}"
+                )
         found.append(path)
     if not found:
         raise TaskError(f"No primary wheel produced for {package.name}")

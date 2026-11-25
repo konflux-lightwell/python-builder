@@ -121,9 +121,131 @@ def test_missing_or_ambiguous_root_metadata_fails_without_modifying_wheel(tmp_pa
     "version,sbom_version,match", [("1.0", None, "filename"), ("1.0+rhlw.1", "1.0", "SBOM")]
 )
 def test_primary_identity_checks(tmp_path, make_wheel, version, sbom_version, match):
-    make_wheel(tmp_path, version=version, sbom_version=sbom_version, redhat=True)
-    with pytest.raises(TaskError, match=match):
+    wheel = make_wheel(tmp_path, version=version, sbom_version=sbom_version, redhat=True)
+    with pytest.raises(TaskError, match=match) as error:
         verify_primary_wheels(tmp_path, Package("demo", "1.0"), "1.0+rhlw.1")
+    message = str(error.value)
+    assert "expected '1.0+rhlw.1'" in message
+    assert "found '1.0'" in message
+    assert wheel.name in message
+
+
+@pytest.mark.parametrize(
+    "metadata,comparison",
+    [
+        ("Name: other\nVersion: 1.0+rhlw.1\n", "expected name 'demo', found 'other'"),
+        ("Name: demo\nVersion: 1.0\n", "expected version '1.0+rhlw.1', found '1.0'"),
+        ("Name: demo\n", "expected version '1.0+rhlw.1', found None"),
+    ],
+)
+def test_primary_metadata_mismatch_reports_comparison(tmp_path, make_wheel, metadata, comparison):
+    wheel = make_wheel(tmp_path, redhat=True)
+    with zipfile.ZipFile(wheel) as archive:
+        members = {name: archive.read(name) for name in archive.namelist()}
+    members["demo-1.0+rhlw.1.dist-info/METADATA"] = metadata.encode()
+    with zipfile.ZipFile(wheel, "w") as archive:
+        for name, data in members.items():
+            archive.writestr(name, data)
+    with pytest.raises(TaskError, match="METADATA") as error:
+        verify_primary_wheels(tmp_path, Package("demo", "1.0"), "1.0+rhlw.1")
+    assert comparison in str(error.value)
+    assert wheel.name in str(error.value)
+
+
+@pytest.fixture
+def generated_sbom():
+    return {
+        "SPDXID": "SPDXRef-DOCUMENT",
+        "packages": [
+            {
+                "SPDXID": "SPDXRef-upstream-demo-1.0-1234abcd",
+                "name": "demo",
+                "versionInfo": "1.0",
+                "externalRefs": [
+                    {"referenceType": "purl", "referenceLocator": "pkg:pypi/demo@1.0"}
+                ],
+            },
+            {
+                "SPDXID": "SPDXRef-wheel-demo-1.0-rhlw.1-1234abcd",
+                "name": "demo",
+                "versionInfo": "1.0+rhlw.1",
+                "externalRefs": [
+                    {"referenceType": "purl", "referenceLocator": "pkg:pypi/demo@1.0%2Brhlw.1"}
+                ],
+            },
+        ],
+        "relationships": [
+            {
+                "spdxElementId": "SPDXRef-DOCUMENT",
+                "relationshipType": "DESCRIBES",
+                "relatedSpdxElement": "SPDXRef-wheel-demo-1.0-rhlw.1-1234abcd",
+            },
+            {
+                "spdxElementId": "SPDXRef-wheel-demo-1.0-rhlw.1-1234abcd",
+                "relationshipType": "GENERATED_FROM",
+                "relatedSpdxElement": "SPDXRef-upstream-demo-1.0-1234abcd",
+            },
+        ],
+    }
+
+
+@pytest.mark.parametrize("document_id", ["SPDXRef-DOCUMENT", "SPDXRef-custom-document"])
+@pytest.mark.parametrize("description", ["relationship", "documentDescribes", "both"])
+def test_primary_wheel_accepts_generated_spdx_ids(
+    tmp_path, make_wheel, generated_sbom, description, document_id
+):
+    generated_sbom["SPDXID"] = document_id
+    generated_sbom["relationships"][0]["spdxElementId"] = document_id
+    if description != "relationship":
+        generated_sbom["documentDescribes"] = [generated_sbom["packages"][1]["SPDXID"]]
+    if description == "documentDescribes":
+        generated_sbom["relationships"] = generated_sbom["relationships"][1:]
+    wheel = make_wheel(tmp_path, sbom=generated_sbom)
+    patch_wheel(wheel, {"libc.so.6": ["GLIBC_2.17"]})
+    assert verify_primary_wheels(tmp_path, Package("demo", "1.0"), "1.0+rhlw.1") == [wheel]
+    target = tmp_path / "primary.spdx.json"
+    extract_sbom(wheel, target)
+    sbom = json.loads(target.read_bytes())
+    assert sbom["packages"][0]["externalRefs"][0]["referenceLocator"] == "pkg:pypi/demo@1.0"
+    assert "file_name=" in sbom["packages"][1]["externalRefs"][0]["referenceLocator"]
+    assert {
+        "spdxElementId": "SPDXRef-wheel-demo-1.0-rhlw.1-1234abcd",
+        "relationshipType": "DEPENDS_ON",
+        "relatedSpdxElement": "SPDXRef-SystemLib-libc.so.6",
+    } in sbom["relationships"]
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    ["missing", "ambiguous", "dangling", "duplicate", "version", "name", "invalid-id", "empty-id"],
+)
+def test_primary_wheel_rejects_invalid_described_package(
+    tmp_path, make_wheel, generated_sbom, invalid
+):
+    primary = generated_sbom["packages"][1]
+    if invalid == "missing":
+        generated_sbom["relationships"] = []
+        generated_sbom["packages"].reverse()
+    elif invalid == "ambiguous":
+        generated_sbom["documentDescribes"] = [generated_sbom["packages"][0]["SPDXID"]]
+    elif invalid == "dangling":
+        generated_sbom["relationships"][0]["relatedSpdxElement"] = "SPDXRef-missing"
+    elif invalid in {"invalid-id", "empty-id"}:
+        generated_sbom["relationships"][0]["relatedSpdxElement"] = (
+            None if invalid == "invalid-id" else ""
+        )
+    elif invalid == "duplicate":
+        generated_sbom["packages"].append(dict(primary))
+    elif invalid == "version":
+        primary["versionInfo"] = "1.0"
+    else:
+        primary["name"] = "another-package"
+    make_wheel(tmp_path, sbom=generated_sbom, redhat=True)
+    with pytest.raises(TaskError, match="SBOM") as error:
+        verify_primary_wheels(tmp_path, Package("demo", "1.0"), "1.0+rhlw.1")
+    if invalid == "name":
+        assert "expected 'demo'" in str(error.value)
+        assert "found 'another-package'" in str(error.value)
 
 
 def test_no_primary_wheel(tmp_path):
