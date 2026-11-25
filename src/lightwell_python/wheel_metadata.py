@@ -180,6 +180,16 @@ def patch_wheel(path: Path, libraries: dict[str, list[str]] | None = None) -> No
             written: set[str] = set()
             for info in source.infolist():
                 name = info.filename
+                if info.is_dir():
+                    # Directory entries are not real wheel members. Copying them
+                    # through and giving them RECORD rows produces a
+                    # spec-noncompliant RECORD that crashes auditwheel on
+                    # re-consumption: auditwheel's iter_files() opens every
+                    # RECORD row as a file (IsADirectoryError for "numpy/").
+                    # Wheels served from the validated wheel cache are
+                    # re-consumed by later builds, so drop directory entries
+                    # here. Installers ignore them, so this is safe.
+                    continue
                 if name == record_name or (
                     name.startswith(f"{dist_info}/sboms/") and name.endswith(".cdx.json")
                 ):

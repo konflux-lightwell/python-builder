@@ -62,6 +62,31 @@ def test_wheel_record_matches_every_member(tmp_path, make_wheel):
         assert "file_name=" in sbom["packages"][0]["externalRefs"][0]["referenceLocator"]
 
 
+def test_patch_wheel_drops_directory_entries(tmp_path, make_wheel):
+    wheel = make_wheel(tmp_path)
+    # Some build backends emit explicit directory entries in the wheel zip.
+    # They must not survive patch_wheel: a RECORD row for a directory crashes
+    # auditwheel's iter_files() with IsADirectoryError when the wheel is later
+    # re-consumed from the validated wheel cache.
+    with zipfile.ZipFile(wheel) as source:
+        members = [(info, source.read(info.filename)) for info in source.infolist()]
+    with zipfile.ZipFile(wheel, "w") as archive:
+        archive.writestr(zipfile.ZipInfo("demo/"), "")
+        archive.writestr(zipfile.ZipInfo("demo/nested/"), "")
+        for info, data in members:
+            archive.writestr(info, data)
+
+    patch_wheel(wheel)
+
+    with zipfile.ZipFile(wheel) as archive:
+        names = archive.namelist()
+        assert not any(name.endswith("/") for name in names)
+        record = next(name for name in names if name.endswith("/RECORD"))
+        rows = [row[0] for row in csv.reader(io.StringIO(archive.read(record).decode()))]
+        assert not any(name.endswith("/") for name in rows)
+        assert set(rows) == set(names)
+
+
 @pytest.mark.parametrize("version", ["1.0", "1.0+rhlw.1"])
 def test_vendored_metadata_is_preserved_and_hashed(tmp_path, make_wheel, version):
     wheel = make_wheel(tmp_path, version=version)
