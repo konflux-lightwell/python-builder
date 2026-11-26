@@ -17,7 +17,7 @@ from packaging.version import Version
 
 from lightwell_python.build_summary import write_checkout_build_summary
 from lightwell_python.runtime import Package, Runner, TaskError, log_stage, sha256
-from lightwell_python.wheel_metadata import patch_wheel, system_libraries
+from lightwell_python.wheel_metadata import normalize_wheel_record, patch_wheel, system_libraries
 
 LOG = logging.getLogger(__name__)
 
@@ -262,6 +262,8 @@ def repair_wheels(runner: Runner, wheels: Path, environment: dict[str, str]) -> 
         TaskError: Shared-library basenames conflict, auditwheel fails, or wheel
             metadata cannot be rewritten safely.
     """
+    for wheel in sorted(wheels.glob("*.whl")):
+        normalize_wheel_record(wheel)
     native = sorted(wheels.glob("*linux_x86_64.whl"))
     LOG.info("Native wheels requiring repair: %d", len(native))
     if native:
