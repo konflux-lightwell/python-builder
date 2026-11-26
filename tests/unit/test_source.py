@@ -73,6 +73,43 @@ def test_rewrite_authoritative_sections(tmp_path):
     assert (tmp_path / "PKG-INFO").read_text().endswith("\n\nVersion: 1.0\n")
 
 
+def test_default_rewrite_matches_canonical_version_spelling(tmp_path):
+    # Stored upstream spelling is non-canonical while the sources normalize it.
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "PKG-INFO").write_text("Name: demo\nVersion: 1.0+upstream.1\n")
+    (source / "VERSION").write_text("1.0+upstream.1\n")
+    (source / "a.py").write_text('__version__ = "1.0+upstream.1"\n')
+    (source / "pyproject.toml").write_text('[project]\nversion = "1.0+upstream.1"\n')
+
+    changes = rewrite_metadata(
+        source, Package("demo", "1.0+Upstream_1"), "1.0+upstream.1.rhlw.2", []
+    )
+
+    assert set(changes) == {
+        source / "PKG-INFO",
+        source / "VERSION",
+        source / "a.py",
+        source / "pyproject.toml",
+    }
+    assert "Version: 1.0+upstream.1.rhlw.2" in (source / "PKG-INFO").read_text()
+    assert (source / "VERSION").read_text() == "1.0+upstream.1.rhlw.2\n"
+    assert '__version__ = "1.0+upstream.1.rhlw.2"' in (source / "a.py").read_text()
+    assert 'version = "1.0+upstream.1.rhlw.2"' in (source / "pyproject.toml").read_text()
+
+
+def test_default_rewrite_skips_rewrite_for_canonically_equal_computed(tmp_path):
+    # A computed version equal to upstream under normalization needs no changes.
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "PKG-INFO").write_text("Name: demo\nVersion: 1.0+Upstream_1\n")
+
+    changes = rewrite_metadata(source, Package("demo", "1.0+upstream.1"), "1.0+Upstream_1", [])
+
+    assert changes == []
+    assert "Version: 1.0+Upstream_1" in (source / "PKG-INFO").read_text()
+
+
 def test_default_rewrite_handles_non_utf8_python_source(tmp_path):
     source = tmp_path / "source"
     source.mkdir()

@@ -40,6 +40,25 @@ def test_default_setup_literal_version(tmp_path, source):
         assert "# release" in target.read_text()
 
 
+def test_default_setup_literal_version_matches_canonical_spelling(tmp_path):
+    # The stored upstream spelling is non-canonical; setup.py carries the
+    # canonical form emitted by tools that write str(Version(...)).
+    import ast
+
+    target = tmp_path / "setup.py"
+    target.write_text("from setuptools import setup\nsetup(version='1.0+upstream.1')\n")
+    rewrite_metadata(tmp_path, Package("demo", "1.0+Upstream_1"), "1.0+upstream.1.rhlw.2", [])
+    tree = ast.parse(target.read_text())
+    values = [
+        keyword.value.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        for keyword in node.keywords
+        if keyword.arg == "version"
+    ]
+    assert values == ["1.0+upstream.1.rhlw.2"]
+
+
 @pytest.mark.parametrize(
     "source",
     [

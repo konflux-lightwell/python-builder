@@ -11,6 +11,8 @@ from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
+from packaging.version import InvalidVersion, Version
+
 from lightwell_python.config import expand
 from lightwell_python.runtime import BuildType, Package, Runner, TaskError, contained_file, run_git
 
@@ -141,7 +143,7 @@ def rewrite_metadata(
     """
     if not source.is_dir():
         raise TaskError("source/ directory is missing")
-    if computed == package.version:
+    if _same_version(computed, package.version):
         return []
     if rules:
         updates = _plan_configured_rewrites(source, package, computed, rules)
@@ -167,6 +169,36 @@ class _PlannedRewrite:
 
     text: str
     python_source: bool = False
+
+
+def _same_version(left: str, right: str) -> bool:
+    """Compare version strings under PEP 440 normalization when possible.
+
+    Builds may carry a non-canonical upstream spelling (``1.0+Upstream_1``)
+    while generated metadata uses the canonical form (``1.0+upstream.1``);
+    both denote the same version. Unparseable values fall back to raw equality.
+    """
+    try:
+        return Version(left) == Version(right)
+    except InvalidVersion:
+        return left == right
+
+
+def _upstream_version_pattern(upstream: str) -> str:
+    """Return an escaped regex matching the upstream version under PEP 440.
+
+    Matches both the stored spelling and its canonical form when they differ,
+    so sources that normalize the version (e.g. build backends writing
+    ``str(Version(...))`` into METADATA) are still rewritten. Unparseable
+    versions fall back to the raw escaped spelling.
+    """
+    try:
+        canonical = str(Version(upstream))
+    except InvalidVersion:
+        return re.escape(upstream)
+    if canonical == upstream:
+        return re.escape(upstream)
+    return f"(?:{re.escape(upstream)}|{re.escape(canonical)})"
 
 
 def _plan_configured_rewrites(
@@ -262,7 +294,8 @@ def _rewrite_setup_version(text: str, upstream: str, computed: str) -> str:
             if (
                 keyword.arg != "version"
                 or not isinstance(value, ast.Constant)
-                or value.value != upstream
+                or not isinstance(value.value, str)
+                or not _same_version(value.value, upstream)
             ):
                 continue
             assert value.end_lineno is not None and value.end_col_offset is not None
@@ -282,7 +315,7 @@ def _plan_default_rewrites(
 ) -> dict[Path, _PlannedRewrite]:
     """Collect changes to metadata, plain VERSION files, and Python version declarations."""
     updates: dict[Path, _PlannedRewrite] = {}
-    old = re.escape(package.version)
+    old = _upstream_version_pattern(package.version)
     for candidate in sorted(source.rglob("*")):
         if candidate.is_dir():
             continue
