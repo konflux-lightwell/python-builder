@@ -105,6 +105,36 @@ def test_normalize_malformed_record_identifies_wheel(tmp_path, record, error_typ
     assert wheel.read_bytes() == before
 
 
+def test_normalize_duplicate_members_with_directory_rows_preserves_wheel(tmp_path):
+    wheel = tmp_path / "demo-1.0-py3-none-any.whl"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        archive.writestr("demo/", "")
+        archive.writestr("demo/module.py", "original")
+        with pytest.warns(UserWarning, match="Duplicate name"):
+            archive.writestr("demo/module.py", "duplicate")
+        archive.writestr("demo-1.0.dist-info/RECORD", "demo/,,\n")
+    before = wheel.read_bytes()
+
+    with pytest.raises(TaskError, match="duplicate members"):
+        normalize_wheel_record(wheel)
+
+    assert wheel.read_bytes() == before
+
+
+@pytest.mark.parametrize("platform", ["linux_x86_64", "manylinux_2_28_x86_64"])
+def test_repair_rejects_selected_wheel_without_record(tmp_path, platform):
+    wheel = tmp_path / f"demo-1.0-cp312-cp312-{platform}.whl"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        archive.writestr("demo-1.0.dist-info/METADATA", "Name: demo\nVersion: 1.0\n")
+    before = wheel.read_bytes()
+
+    with pytest.raises(TaskError, match="missing its top-level RECORD") as error:
+        repair_wheels(FakeRunner(), tmp_path, {})
+
+    assert wheel.name in str(error.value)
+    assert wheel.read_bytes() == before
+
+
 @pytest.mark.parametrize("signature", [".jws", ".p7s"])
 def test_normalize_signed_legacy_record_leaves_wheel_unchanged(tmp_path, signature):
     wheel = tmp_path / "demo-1.0-py3-none-any.whl"

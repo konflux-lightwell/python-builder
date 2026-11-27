@@ -147,8 +147,9 @@ def _dist_info_directory(archive: zipfile.ZipFile) -> str:
 def normalize_wheel_record(path: Path) -> None:
     """Remove legacy directory rows before auditwheel iterates the wheel's RECORD.
 
-    File rows, hashes, and embedded metadata are preserved. Wheels with no directory
-    rows are left byte-for-byte unchanged; modified wheels are replaced atomically.
+    File paths, recorded hashes and sizes, and embedded metadata are preserved.
+    Rewritten RECORDs use LF line endings. Wheels with no directory rows are left
+    byte-for-byte unchanged; modified wheels are replaced atomically.
 
     Args:
         path: Writable wheel copied into the build's scratch directory.
