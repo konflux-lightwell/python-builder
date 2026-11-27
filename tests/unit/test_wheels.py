@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from lightwell_python.build import (
+    _extract_shared_libraries,
     backend_environment,
     collect_artifacts,
     repair_wheels,
@@ -311,6 +312,55 @@ def test_native_repair_runs_with_temporary_libraries(tmp_path, make_wheel):
     repair_wheels(runner, tmp_path, {})
     assert [a[1] for a, _ in runner.calls] == ["repair", "show"]
     assert native.exists()
+
+
+def _native_wheel(directory, name, members):
+    wheel = directory / f"{name}-1.0-py3-none-linux_x86_64.whl"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        for member, data in members.items():
+            archive.writestr(member, data)
+    return wheel
+
+
+def test_conflicting_extension_modules_do_not_abort_repair(tmp_path, make_wheel, caplog):
+    _native_wheel(
+        tmp_path, "multidicta", {"multidict/_ext.so": b"v6", "multidict/libshared.so": b"same"}
+    )
+    _native_wheel(
+        tmp_path, "multidictb", {"multidict/_ext.so": b"v7", "multidict/libshared.so": b"same"}
+    )
+
+    def repair(args, kwargs):
+        if args[1] == "repair":
+            from pathlib import Path
+
+            libraries = Path(kwargs["env"]["LD_LIBRARY_PATH"].split(":")[0])
+            assert not (libraries / "_ext.so").exists()
+            assert (libraries / "libshared.so").read_bytes() == b"same"
+            make_wheel(tmp_path, native=True)
+        elif args[1] == "show":
+            return "system-provided shared libraries: libc.so.6 with versions {'GLIBC_2.17'}"
+
+    runner = FakeRunner(repair)
+    with caplog.at_level("WARNING"):
+        repair_wheels(runner, tmp_path, {})
+    assert [a[1] for a, _ in runner.calls] == ["repair", "show"]
+    assert "_ext.so" in caplog.text
+    assert "multidicta-1.0" in caplog.text and "multidictb-1.0" in caplog.text
+
+
+def test_ambiguous_library_stays_omitted_for_later_identical_copies(tmp_path):
+    first = _native_wheel(tmp_path, "a", {"p/libx.so": b"one"})
+    second = _native_wheel(tmp_path, "b", {"p/libx.so": b"two"})
+    third = _native_wheel(tmp_path, "c", {"p/libx.so": b"one", "p/liby.so": b"y"})
+    destination = tmp_path / "libs"
+    destination.mkdir()
+    owners: dict[str, str] = {}
+    ambiguous: set[str] = set()
+    for wheel in (first, second, third):
+        _extract_shared_libraries(wheel, destination, owners, ambiguous)
+    assert ambiguous == {"libx.so"}
+    assert sorted(path.name for path in destination.iterdir()) == ["liby.so"]
 
 
 def test_manifest_produced_wins_independent_of_order(tmp_path):
