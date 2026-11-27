@@ -275,16 +275,24 @@ def repair_wheels(runner: Runner, wheels: Path, environment: dict[str, str]) -> 
         environment: Backend environment inherited by auditwheel.
 
     Raises:
-        TaskError: Shared-library basenames conflict, auditwheel fails, or wheel
-            metadata cannot be rewritten safely.
+        TaskError: auditwheel fails (including when a wheel needs a shared
+            library whose basename differs between wheels) or wheel metadata
+            cannot be rewritten safely.
     """
     native = sorted(wheels.glob("*linux_x86_64.whl"))
     LOG.info("Native wheels requiring repair: %d", len(native))
     if native:
         with tempfile.TemporaryDirectory(prefix="lightwell-libs-") as directory:
             libraries = Path(directory)
+            owners: dict[str, str] = {}
+            ambiguous: set[str] = set()
             for wheel in native:
-                _extract_shared_libraries(wheel, libraries)
+                _extract_shared_libraries(wheel, libraries, owners, ambiguous)
+            if ambiguous:
+                LOG.warning(
+                    "Omitted ambiguous shared libraries from the repair search path: %s",
+                    ", ".join(sorted(ambiguous)),
+                )
             inherited = environment.get(
                 "LD_LIBRARY_PATH", runner.environment.get("LD_LIBRARY_PATH", "")
             )
@@ -303,19 +311,45 @@ def repair_wheels(runner: Runner, wheels: Path, environment: dict[str, str]) -> 
         patch_wheel(wheel, libraries_by_name)
 
 
-def _extract_shared_libraries(wheel: Path, destination: Path) -> None:
-    """Flatten a wheel's shared libraries for auditwheel, rejecting conflicting names."""
+def _extract_shared_libraries(
+    wheel: Path, destination: Path, owners: dict[str, str], ambiguous: set[str]
+) -> None:
+    """Flatten a wheel's shared libraries into one directory for auditwheel.
+
+    A basename shipped with different content by two wheels (e.g. the extension
+    module of two versions of one package) cannot be represented in a flat
+    namespace. It is removed and recorded in ``ambiguous`` rather than aborting:
+    a wheel that actually links against it then fails in auditwheel because the
+    library cannot be resolved, so repair never silently uses the wrong one.
+
+    Args:
+        wheel: Wheel to read shared libraries from.
+        destination: Flat directory placed on LD_LIBRARY_PATH.
+        owners: Basename to the wheel that first supplied it; updated in place.
+        ambiguous: Basenames with conflicting content; updated in place.
+    """
     with zipfile.ZipFile(wheel) as archive:
         for name in archive.namelist():
             if name.endswith("/") or not re.search(r"\.so(?:\.|$)", name):
                 continue
 
-            target = destination / Path(name).name
+            basename = Path(name).name
+            if basename in ambiguous:
+                continue
+            target = destination / basename
             with archive.open(name) as source:
                 if target.exists():
                     if source.read() != target.read_bytes():
-                        raise TaskError(f"Conflicting wheel library: {target.name}")
+                        LOG.warning(
+                            "Shared library %s differs between %s and %s",
+                            basename,
+                            owners[basename],
+                            wheel.name,
+                        )
+                        target.unlink()
+                        ambiguous.add(basename)
                     continue
+                owners[basename] = wheel.name
                 with target.open("wb") as output:
                     shutil.copyfileobj(source, output)
 
