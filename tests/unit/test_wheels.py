@@ -86,6 +86,25 @@ def test_normalize_clean_wheel_preserves_archive_bytes(tmp_path, make_wheel):
     assert wheel.read_bytes() == before
 
 
+@pytest.mark.parametrize(
+    "record,error_type",
+    [(b"\xff", UnicodeDecodeError), (b'"unterminated', csv.Error)],
+)
+def test_normalize_malformed_record_identifies_wheel(tmp_path, record, error_type):
+    wheel = tmp_path / "broken-1.0-py3-none-any.whl"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        archive.writestr("broken-1.0.dist-info/RECORD", record)
+    before = wheel.read_bytes()
+
+    with pytest.raises(TaskError) as error:
+        normalize_wheel_record(wheel)
+
+    assert wheel.name in str(error.value)
+    assert "RECORD" in str(error.value)
+    assert isinstance(error.value.__cause__, error_type)
+    assert wheel.read_bytes() == before
+
+
 @pytest.mark.parametrize("signature", [".jws", ".p7s"])
 def test_normalize_signed_legacy_record_leaves_wheel_unchanged(tmp_path, signature):
     wheel = tmp_path / "demo-1.0-py3-none-any.whl"

@@ -154,8 +154,8 @@ def normalize_wheel_record(path: Path) -> None:
         path: Writable wheel copied into the build's scratch directory.
 
     Raises:
-        TaskError: The wheel has no RECORD, or requires normalization but is signed
-            or has duplicate members.
+        TaskError: The wheel has a missing or malformed RECORD, or requires
+            normalization but is signed or has duplicate members.
     """
     with zipfile.ZipFile(path) as source:
         member_names = source.namelist()
@@ -163,8 +163,11 @@ def normalize_wheel_record(path: Path) -> None:
         if record_name not in member_names:
             raise TaskError(f"Wheel {path.name} is missing its top-level RECORD: {record_name}")
 
-        record_text = source.read(record_name).decode()
-        record_rows = list(csv.reader(io.StringIO(record_text), strict=True))
+        try:
+            record_text = source.read(record_name).decode()
+            record_rows = list(csv.reader(io.StringIO(record_text), strict=True))
+        except (UnicodeDecodeError, csv.Error) as exc:
+            raise TaskError(f"Wheel {path.name}: invalid RECORD: {exc}") from exc
         file_rows = []
         for row in record_rows:
             # RECORD is CSV: the first column is a path; directory paths end in '/'.
