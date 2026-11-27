@@ -253,6 +253,9 @@ def run_fromager_checkout(
 def repair_wheels(runner: Runner, wheels: Path, environment: dict[str, str]) -> None:
     """Repair native Linux wheels and update publishable wheel SBOMs.
 
+    Normalize legacy RECORDs only before auditwheel repair or inspection. Wheels
+    selected for neither native repair nor publication are left untouched.
+
     Args:
         runner: Adapter for auditwheel repair/show commands.
         wheels: Fromager wheel download directory, modified in place.
@@ -262,14 +265,13 @@ def repair_wheels(runner: Runner, wheels: Path, environment: dict[str, str]) -> 
         TaskError: Shared-library basenames conflict, auditwheel fails, or wheel
             metadata cannot be rewritten safely.
     """
-    for wheel in sorted(wheels.glob("*.whl")):
-        normalize_wheel_record(wheel)
     native = sorted(wheels.glob("*linux_x86_64.whl"))
     LOG.info("Native wheels requiring repair: %d", len(native))
     if native:
         with tempfile.TemporaryDirectory(prefix="lightwell-libs-") as directory:
             libraries = Path(directory)
             for wheel in native:
+                normalize_wheel_record(wheel)
                 _extract_shared_libraries(wheel, libraries)
             inherited = environment.get(
                 "LD_LIBRARY_PATH", runner.environment.get("LD_LIBRARY_PATH", "")
@@ -284,6 +286,7 @@ def repair_wheels(runner: Runner, wheels: Path, environment: dict[str, str]) -> 
         LOG.info("Processing wheel %d/%d: %s", index, len(publishable_wheels), wheel.name)
         libraries_by_name = {}
         if "manylinux" in wheel.name:
+            normalize_wheel_record(wheel)
             report = runner.run(["auditwheel", "show", wheel], env=environment, capture=True)
             libraries_by_name = system_libraries(report)
         patch_wheel(wheel, libraries_by_name)

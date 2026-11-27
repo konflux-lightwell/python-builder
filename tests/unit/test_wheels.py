@@ -99,6 +99,23 @@ def test_normalize_signed_legacy_record_leaves_wheel_unchanged(tmp_path, signatu
     assert wheel.read_bytes() == before
 
 
+@pytest.mark.parametrize("platform", ["win_amd64", "macosx_11_0_arm64"])
+@pytest.mark.parametrize("broken_record", ["missing", "signed_directories"])
+def test_repair_leaves_non_publishable_wheels_untouched(tmp_path, platform, broken_record):
+    wheel = tmp_path / f"unused-1.0-cp312-cp312-{platform}.whl"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        archive.writestr("unused-1.0.dist-info/METADATA", "Name: unused\nVersion: 1.0\n")
+        if broken_record == "signed_directories":
+            archive.writestr("unused/", "")
+            archive.writestr("unused-1.0.dist-info/RECORD", "unused/,,\n")
+            archive.writestr("unused-1.0.dist-info/RECORD.jws", "signature")
+    before = wheel.read_bytes()
+
+    repair_wheels(FakeRunner(), tmp_path, {})
+
+    assert wheel.read_bytes() == before
+
+
 @pytest.mark.parametrize("native", [False, True])
 def test_repair_normalizes_cached_directory_records_before_auditwheel(tmp_path, make_wheel, native):
     wheel = make_wheel(tmp_path, native=True)
