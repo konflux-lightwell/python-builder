@@ -23,6 +23,7 @@ from lightwell_python.tasks import wheels
 from lightwell_python.wheel_metadata import (
     annotate_ai_attribution,
     extract_sbom,
+    normalize_wheel_record,
     patch_sbom,
     patch_wheel,
     system_libraries,
@@ -60,6 +61,144 @@ def test_wheel_record_matches_every_member(tmp_path, make_wheel):
         )
         assert any(p["name"] == "libc.so.6" for p in sbom["packages"])
         assert "file_name=" in sbom["packages"][0]["externalRefs"][0]["referenceLocator"]
+
+
+@pytest.mark.parametrize("passes", [1, 2])
+def test_patch_wheel_excludes_directories_from_record(tmp_path, make_wheel, passes):
+    wheel = make_wheel(tmp_path)
+    with zipfile.ZipFile(wheel, "a") as archive:
+        archive.writestr("demo/", "")
+        archive.writestr("demo/module.py", "answer = 42")
+    for _ in range(passes):
+        patch_wheel(wheel)
+    with zipfile.ZipFile(wheel) as archive:
+        record = next(n for n in archive.namelist() if n.endswith("/RECORD"))
+        rows = list(csv.reader(io.StringIO(archive.read(record).decode())))
+        assert "demo/" not in {row[0] for row in rows}
+        assert archive.read("demo/module.py") == b"answer = 42"
+
+
+def test_normalize_clean_wheel_preserves_archive_bytes(tmp_path, make_wheel):
+    wheel = make_wheel(tmp_path)
+    patch_wheel(wheel)
+    before = wheel.read_bytes()
+    normalize_wheel_record(wheel)
+    assert wheel.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "record,error_type",
+    [(b"\xff", UnicodeDecodeError), (b'"unterminated', csv.Error)],
+)
+def test_normalize_malformed_record_identifies_wheel(tmp_path, record, error_type):
+    wheel = tmp_path / "broken-1.0-py3-none-any.whl"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        archive.writestr("broken-1.0.dist-info/RECORD", record)
+    before = wheel.read_bytes()
+
+    with pytest.raises(TaskError) as error:
+        normalize_wheel_record(wheel)
+
+    assert wheel.name in str(error.value)
+    assert "RECORD" in str(error.value)
+    assert isinstance(error.value.__cause__, error_type)
+    assert wheel.read_bytes() == before
+
+
+def test_normalize_duplicate_members_with_directory_rows_preserves_wheel(tmp_path):
+    wheel = tmp_path / "demo-1.0-py3-none-any.whl"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        archive.writestr("demo/", "")
+        archive.writestr("demo/module.py", "original")
+        with pytest.warns(UserWarning, match="Duplicate name"):
+            archive.writestr("demo/module.py", "duplicate")
+        archive.writestr("demo-1.0.dist-info/RECORD", "demo/,,\n")
+    before = wheel.read_bytes()
+
+    with pytest.raises(TaskError, match="duplicate members"):
+        normalize_wheel_record(wheel)
+
+    assert wheel.read_bytes() == before
+
+
+@pytest.mark.parametrize("platform", ["linux_x86_64", "manylinux_2_28_x86_64"])
+def test_repair_rejects_selected_wheel_without_record(tmp_path, platform):
+    wheel = tmp_path / f"demo-1.0-cp312-cp312-{platform}.whl"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        archive.writestr("demo-1.0.dist-info/METADATA", "Name: demo\nVersion: 1.0\n")
+    before = wheel.read_bytes()
+
+    with pytest.raises(TaskError, match="missing its top-level RECORD") as error:
+        repair_wheels(FakeRunner(), tmp_path, {})
+
+    assert wheel.name in str(error.value)
+    assert wheel.read_bytes() == before
+
+
+@pytest.mark.parametrize("signature", [".jws", ".p7s"])
+def test_normalize_signed_legacy_record_leaves_wheel_unchanged(tmp_path, signature):
+    wheel = tmp_path / "demo-1.0-py3-none-any.whl"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        archive.writestr("demo/", "")
+        archive.writestr("demo-1.0.dist-info/RECORD", "demo/,,\n")
+        archive.writestr(f"demo-1.0.dist-info/RECORD{signature}", "signature")
+    before = wheel.read_bytes()
+    with pytest.raises(TaskError, match="signed wheel"):
+        normalize_wheel_record(wheel)
+    assert wheel.read_bytes() == before
+
+
+@pytest.mark.parametrize("platform", ["win_amd64", "macosx_11_0_arm64"])
+@pytest.mark.parametrize("broken_record", ["missing", "signed_directories"])
+def test_repair_leaves_non_publishable_wheels_untouched(tmp_path, platform, broken_record):
+    wheel = tmp_path / f"unused-1.0-cp312-cp312-{platform}.whl"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        archive.writestr("unused-1.0.dist-info/METADATA", "Name: unused\nVersion: 1.0\n")
+        if broken_record == "signed_directories":
+            archive.writestr("unused/", "")
+            archive.writestr("unused-1.0.dist-info/RECORD", "unused/,,\n")
+            archive.writestr("unused-1.0.dist-info/RECORD.jws", "signature")
+    before = wheel.read_bytes()
+
+    repair_wheels(FakeRunner(), tmp_path, {})
+
+    assert wheel.read_bytes() == before
+
+
+@pytest.mark.parametrize("native", [False, True])
+def test_repair_normalizes_cached_directory_records_before_auditwheel(tmp_path, make_wheel, native):
+    wheel = make_wheel(tmp_path, native=True)
+    if native:
+        target = wheel.with_name(wheel.name.replace("manylinux_2_28_x86_64", "linux_x86_64"))
+        wheel.rename(target)
+        wheel = target
+    # Reproduce a cached wheel whose RECORD was generated by the old builder.
+    with zipfile.ZipFile(wheel, "a") as archive:
+        archive.writestr("demo/", "")
+        record = next(n for n in archive.namelist() if n.endswith("/RECORD"))
+    with zipfile.ZipFile(wheel) as source:
+        contents = {n: source.read(n) for n in source.namelist()}
+    contents[record] = b"demo/,,\n" + record.encode() + b",,\n"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        for name, data in contents.items():
+            archive.writestr(name, data)
+
+    def inspect(args, kwargs):
+        with zipfile.ZipFile(args[2]) as archive:
+            rows = list(csv.reader(io.StringIO(archive.read(record).decode())))
+            # Model auditwheel's RECORD iteration: every entry must be a file.
+            assert all(not row[0].endswith("/") for row in rows)
+            assert archive.read("demo,a.py") == contents["demo,a.py"]
+            assert archive.read(record.replace("RECORD", "sboms/fromager.spdx.json"))
+        if args[1] == "repair":
+            make_wheel(tmp_path, native=True)
+        return "system-provided shared libraries: libc.so.6 with versions {'GLIBC_2.17'}"
+
+    repair_wheels(FakeRunner(inspect), tmp_path, {})
+    repaired = next(p for p in tmp_path.glob("*.whl") if "manylinux" in p.name)
+    with zipfile.ZipFile(repaired) as archive:
+        sbom = json.loads(archive.read(record.replace("RECORD", "sboms/redhat.spdx.json")))
+        assert any(p["name"] == "libc.so.6" for p in sbom["packages"])
 
 
 @pytest.mark.parametrize("version", ["1.0", "1.0+rhlw.1"])

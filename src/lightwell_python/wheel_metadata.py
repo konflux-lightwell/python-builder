@@ -144,6 +144,66 @@ def _dist_info_directory(archive: zipfile.ZipFile) -> str:
     return directories[0]
 
 
+def normalize_wheel_record(path: Path) -> None:
+    """Remove legacy directory rows before auditwheel iterates the wheel's RECORD.
+
+    File paths, recorded hashes and sizes, and embedded metadata are preserved.
+    Rewritten RECORDs use LF line endings. Wheels with no directory rows are left
+    byte-for-byte unchanged; modified wheels are replaced atomically.
+
+    Args:
+        path: Writable wheel copied into the build's scratch directory.
+
+    Raises:
+        TaskError: The wheel has a missing or malformed RECORD, or requires
+            normalization but is signed or has duplicate members.
+    """
+    with zipfile.ZipFile(path) as source:
+        member_names = source.namelist()
+        record_name = f"{_dist_info_directory(source)}/RECORD"
+        if record_name not in member_names:
+            raise TaskError(f"Wheel {path.name} is missing its top-level RECORD: {record_name}")
+
+        try:
+            record_text = source.read(record_name).decode()
+            record_rows = list(csv.reader(io.StringIO(record_text), strict=True))
+        except (UnicodeDecodeError, csv.Error) as exc:
+            raise TaskError(f"Wheel {path.name}: invalid RECORD: {exc}") from exc
+        file_rows = []
+        for row in record_rows:
+            # RECORD is CSV: the first column is a path; directory paths end in '/'.
+            if row and row[0].endswith("/"):
+                continue
+            file_rows.append(row)
+        if len(file_rows) == len(record_rows):
+            return
+
+        # Only check modification restrictions when the wheel needs changing.
+        if len(set(member_names)) != len(member_names):
+            raise TaskError("Wheel contains duplicate members")
+        has_jws_signature = f"{record_name}.jws" in member_names
+        has_p7s_signature = f"{record_name}.p7s" in member_names
+        if has_jws_signature or has_p7s_signature:
+            raise TaskError("Cannot modify an already signed wheel")
+
+        record_buffer = io.StringIO(newline="")
+        csv.writer(record_buffer, lineterminator="\n").writerows(file_rows)
+        corrected_record = record_buffer.getvalue().encode()
+
+        # Copy the archive, replacing only RECORD. Keep the original until this succeeds.
+        with tempfile.TemporaryDirectory(dir=path.parent, prefix=".wheel-") as directory:
+            corrected_wheel = Path(directory) / path.name
+            with zipfile.ZipFile(corrected_wheel, "w") as output:
+                output.comment = source.comment
+                for member in source.infolist():
+                    if member.filename == record_name:
+                        data = corrected_record
+                    else:
+                        data = source.read(member)
+                    output.writestr(member, data)
+            corrected_wheel.replace(path)
+
+
 def patch_wheel(path: Path, libraries: dict[str, list[str]] | None = None) -> None:
     """Update embedded SBOMs and regenerate the wheel's CSV RECORD.
 
@@ -179,6 +239,8 @@ def patch_wheel(path: Path, libraries: dict[str, list[str]] | None = None) -> No
             rows = []
             written: set[str] = set()
             for info in source.infolist():
+                if info.is_dir():
+                    continue
                 name = info.filename
                 if name == record_name or (
                     name.startswith(f"{dist_info}/sboms/") and name.endswith(".cdx.json")
